@@ -50,20 +50,28 @@ TestParseRotations = {}
 function TestParseRotations:testParseRotations()
     luaunit.assertItemsEquals(
         day1.parse_rotations("L68\nL30\nR48"),
-        { { direction = "L", amount = 68 }, { direction = "L", amount = 30 }, {
-            direction = "R",
-            amount = 48,
-        } }
+        {
+            { direction = "L", amount = 68 },
+            { direction = "L", amount = 30 },
+            {
+                direction = "R",
+                amount = 48,
+            },
+        }
     )
 end
 
 function TestParseRotations:testParseRotationsFromLines()
     luaunit.assertItemsEquals(
-        day1.parse_rotations({"L68", "L30", "R48"}),
-        { { direction = "L", amount = 68 }, { direction = "L", amount = 30 }, {
-            direction = "R",
-            amount = 48,
-        } }
+        day1.parse_rotations({ "L68", "L30", "R48" }),
+        {
+            { direction = "L", amount = 68 },
+            { direction = "L", amount = 30 },
+            {
+                direction = "R",
+                amount = 48,
+            },
+        }
     )
 end
 
@@ -86,6 +94,100 @@ function TestRotateDial:testOverrotateMany()
     luaunit.assertEquals(day1.rotate_dial(0, "L", 1233), 67)
 end
 
+TestRotateDialCounting = {}
+
+function TestRotateDialCounting:testRotateFromZero()
+    local val, zeros = day1.rotate_dial_counting_zeros(0, "R", 1)
+    luaunit.assertEquals(val, 1)
+    luaunit.assertEquals(zeros, 0)
+
+    val, zeros = day1.rotate_dial_counting_zeros(0, "L", 1)
+    luaunit.assertEquals(val, 99)
+    luaunit.assertEquals(zeros, 0)
+end
+
+function TestRotateDialCounting:testRotateSimple()
+    local val, zeros = day1.rotate_dial_counting_zeros(50, "R", 1)
+    luaunit.assertEquals(val, 51)
+    luaunit.assertEquals(zeros, 0)
+
+    val, zeros = day1.rotate_dial_counting_zeros(50, "L", 1)
+    luaunit.assertEquals(val, 49)
+    luaunit.assertEquals(zeros, 0)
+
+    val, zeros = day1.rotate_dial_counting_zeros(50, "R", 49)
+    luaunit.assertEquals(val, 99)
+    luaunit.assertEquals(zeros, 0)
+
+    val, zeros = day1.rotate_dial_counting_zeros(50, "L", 50)
+    luaunit.assertEquals(val, 0)
+    luaunit.assertEquals(zeros, 1)
+end
+
+function TestRotateDialCounting:testOverrotateOnce()
+    local val, zeros = day1.rotate_dial_counting_zeros(50, "R", 50)
+    luaunit.assertEquals(val, 0)
+    luaunit.assertEquals(zeros, 1)
+
+    val, zeros = day1.rotate_dial_counting_zeros(50, "R", 51)
+    luaunit.assertEquals(val, 1)
+    luaunit.assertEquals(zeros, 1)
+
+    val, zeros = day1.rotate_dial_counting_zeros(50, "L", 50)
+    luaunit.assertEquals(val, 0)
+    luaunit.assertEquals(zeros, 1)
+
+    val, zeros = day1.rotate_dial_counting_zeros(50, "L", 51)
+    luaunit.assertEquals(val, 99)
+    luaunit.assertEquals(zeros, 1)
+
+    val, zeros = day1.rotate_dial_counting_zeros(50, "L", 52)
+    luaunit.assertEquals(val, 98)
+    luaunit.assertEquals(zeros, 1)
+end
+
+function TestRotateDialCounting:testOverrotateMany()
+    local val, zeros = day1.rotate_dial_counting_zeros(0, "R", 1234)
+    luaunit.assertEquals(val, 34)
+    luaunit.assertEquals(zeros, 12)
+
+    val, zeros = day1.rotate_dial_counting_zeros(1, "R", 1234)
+    luaunit.assertEquals(val, 35)
+    luaunit.assertEquals(zeros, 12)
+
+    val, zeros = day1.rotate_dial_counting_zeros(65, "R", 1234)
+    luaunit.assertEquals(val, 99)
+    luaunit.assertEquals(zeros, 12)
+
+    val, zeros = day1.rotate_dial_counting_zeros(66, "R", 1234)
+    luaunit.assertEquals(val, 0)
+    luaunit.assertEquals(zeros, 13)
+
+    val, zeros = day1.rotate_dial_counting_zeros(67, "R", 1234)
+    luaunit.assertEquals(val, 1)
+    luaunit.assertEquals(zeros, 13)
+
+    val, zeros = day1.rotate_dial_counting_zeros(0, "L", 1233)
+    luaunit.assertEquals(val, 67)
+    luaunit.assertEquals(zeros, 12)
+
+    val, zeros = day1.rotate_dial_counting_zeros(99, "L", 1233)
+    luaunit.assertEquals(val, 66)
+    luaunit.assertEquals(zeros, 12)
+
+    val, zeros = day1.rotate_dial_counting_zeros(34, "L", 1233)
+    luaunit.assertEquals(val, 1)
+    luaunit.assertEquals(zeros, 12)
+
+    val, zeros = day1.rotate_dial_counting_zeros(33, "L", 1233)
+    luaunit.assertEquals(val, 0)
+    luaunit.assertEquals(zeros, 13)
+
+    val, zeros = day1.rotate_dial_counting_zeros(32, "L", 1233)
+    luaunit.assertEquals(val, 99)
+    luaunit.assertEquals(zeros, 13)
+end
+
 TestCountZeros = {}
 
 function TestCountZeros:testSmallSample()
@@ -103,6 +205,26 @@ R14
 L82
         ]]),
         3
+    )
+end
+
+TestCountZeroClicks = {}
+
+function TestCountZeroClicks:testSmallSample()
+    day1.count_zero_clicks(
+        day1.parse_rotations([[
+L68
+L30
+R48
+L5
+R60
+L55
+L1
+L99
+R14
+L82
+        ]]),
+        6
     )
 end
 
