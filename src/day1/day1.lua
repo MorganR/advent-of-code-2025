@@ -21,7 +21,22 @@ function M.parse_rotation(str)
         error("invalid number in '" .. str .. "' after the direction")
     end
 
-    return direction, amount
+    return { direction = direction, amount = amount }
+end
+
+-- Parses the rotations from the given string or sequence.
+function M.parse_rotations(str_or_lines)
+    local rotations = {}
+    if type(str_or_lines) == "string" then
+        for line in str_or_lines:gmatch("[^\n%s]+") do
+            table.insert(rotations, M.parse_rotation(line))
+        end
+    else
+        for _, line in ipairs(str_or_lines) do
+            table.insert(rotations, M.parse_rotation(line))
+        end
+    end
+    return rotations
 end
 
 -- Returns the value of the dial after performing the given direction.
@@ -38,6 +53,19 @@ function M.rotate_dial(value, direction, amount)
         end
     end
     return value
+end
+
+-- Count the zeros if applying the given rotation to a dial starting at a value of 50.
+function M.count_zeros(rotations)
+    local value = 50
+    local num_zeros = 0
+    for _, r in ipairs(rotations) do
+        value = M.rotate_dial(value, r.direction, r.amount)
+        if value == 0 then
+            num_zeros = num_zeros + 1
+        end
+    end
+    return num_zeros
 end
 
 return M
