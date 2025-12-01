@@ -2,13 +2,8 @@
 
 -- Advent of Code 2025 - Day 1, Part 1
 
-local M = {}
-
--- Parse rotation string like "L50" or "R01" into direction and amount
-function M.parse_rotations(str)
-    -- TODO: Implement parsing
-    return nil, nil
-end
+package.path = package.path .. ";./src/day1/?.lua"
+local day1 = require("day1")
 
 local function solve(input)
     -- TODO: Implement solution
@@ -31,9 +26,4 @@ local function main()
     print(result)
 end
 
--- Only run main if this file is executed directly (not required as module)
-if not pcall(debug.getlocal, 4, 1) then
-    main()
-end
-
-return M
+main()
