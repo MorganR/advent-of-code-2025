@@ -46,5 +46,25 @@ function TestParseRotation:testInvalidNumber()
     luaunit.assertErrorMsgContains("invalid number", day1.parse_rotation, "LX")
 end
 
+-- Tests for rotate_dial
+TestRotateDial = {}
+
+function TestRotateDial:testRotateSimple()
+    luaunit.assertEquals(day1.rotate_dial(50, "R", 1), 51)
+    luaunit.assertEquals(day1.rotate_dial(50, "L", 1), 49)
+end
+
+function TestRotateDial:testOverrotateOnce()
+    luaunit.assertEquals(day1.rotate_dial(50, "R", 50), 0)
+    luaunit.assertEquals(day1.rotate_dial(50, "R", 51), 1)
+    luaunit.assertEquals(day1.rotate_dial(50, "L", 51), 99)
+    luaunit.assertEquals(day1.rotate_dial(50, "L", 52), 98)
+end
+
+function TestRotateDial:testOverrotateMany()
+    luaunit.assertEquals(day1.rotate_dial(0, "R", 1234), 34)
+    luaunit.assertEquals(day1.rotate_dial(0, "L", 1233), 67)
+end
+
 -- Run tests
 os.exit(luaunit.LuaUnit.run())

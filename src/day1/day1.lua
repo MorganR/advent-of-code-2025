@@ -24,4 +24,20 @@ function M.parse_rotation(str)
     return direction, amount
 end
 
+-- Returns the value of the dial after performing the given direction.
+function M.rotate_dial(value, direction, amount)
+    if direction == "R" then
+        value = value + (amount % 100)
+        if value > 99 then
+            value = value - 100
+        end
+    else
+        value = value - (amount % 100)
+        if value < 0 then
+            value = 100 + value
+        end
+    end
+    return value
+end
+
 return M
