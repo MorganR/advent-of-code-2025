@@ -18,9 +18,9 @@ function M.IdRange.parse(str)
     return M.IdRange.new(tonumber(start), tonumber(finish))
 end
 
-M.IdRange.find_invalid_ids = function(self)
+M.IdRange.find_p1_invalid_ids = function(self)
     local invalid_ids = {}
-    local invalid_id = M.InvalidId.next_from_any(self.start)
+    local invalid_id = M.P1InvalidId.next_from_any(self.start)
 
     while invalid_id.value <= self.finish do
         invalid_ids[#invalid_ids + 1] = invalid_id.value
@@ -34,10 +34,10 @@ M.IdRange.__tostring = function(self)
     return "[" .. self.start .. ", " .. self.finish .. "]"
 end
 
-M.InvalidId = {}
-M.InvalidId.__index = M.InvalidId
+M.P1InvalidId = {}
+M.P1InvalidId.__index = M.P1InvalidId
 
-function M.InvalidId.new(value)
+function M.P1InvalidId.new(value)
     local value_str = tostring(value)
     local num_digits = string.len(value_str)
     local half_str = string.sub(value, 1, num_digits / 2)
@@ -52,10 +52,10 @@ function M.InvalidId.new(value)
         repeated_half = repeated_half,
         value_str = value_str,
         num_digits = num_digits
-    }, M.InvalidId)
+    }, M.P1InvalidId)
 end
 
-function M.InvalidId.next_from_any(value)
+function M.P1InvalidId.next_from_any(value)
     local full_id = value
     local value_str = tostring(value)
     local repeated_half = value
@@ -88,10 +88,10 @@ function M.InvalidId.next_from_any(value)
         repeated_half = repeated_half,
         value_str = value_str,
         num_digits = num_digits
-    }, M.InvalidId)
+    }, M.P1InvalidId)
 end
 
-M.InvalidId.next = function(self)
+M.P1InvalidId.next = function(self)
     local repeated_half = self.repeated_half + 1
     local half_str = tostring(repeated_half)
     local value_str = half_str .. half_str
@@ -103,7 +103,7 @@ M.InvalidId.next = function(self)
         repeated_half = repeated_half,
         value_str = value_str,
         num_digits = num_digits
-    }, M.InvalidId)
+    }, M.P1InvalidId)
 end
 
 function M.parse_id_ranges(str)

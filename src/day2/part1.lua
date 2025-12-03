@@ -18,7 +18,7 @@ local function solve(input)
     local id_sum = 0
     local count_ids = 0
     for _, range in ipairs(ranges) do
-        local invalid_ids = range:find_invalid_ids()
+        local invalid_ids = range:find_p1_invalid_ids()
         -- print("\tIn range " .. tostring(range) .. ", found IDs " .. table.concat(invalid_ids, ", "))
         for _, id in ipairs(invalid_ids) do
             id_sum = id_sum + id
