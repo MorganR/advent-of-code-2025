@@ -39,7 +39,12 @@ luac.out
 *.x86_64
 *.hex
 
-
+# Lua
 external/
 
+# Claude
 .claude/
+
+# Rust
+target
+
