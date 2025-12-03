@@ -72,6 +72,37 @@ function TestIdRange:test_find_p1_invalid_ids_many()
     luaunit.assertItemsEquals(invalid_ids, {11, 22})
 end
 
+function TestIdRange:test_find_p2_invalid_ids_none()
+    local range = day2.IdRange.new(1, 9)
+    local invalid_ids = range:find_p2_invalid_ids()
+
+    luaunit.assertEquals(#invalid_ids, 0)
+end
+
+function TestIdRange:test_find_p2_invalid_ids_one()
+    local range = day2.IdRange.new(10, 20)
+    local invalid_ids = range:find_p2_invalid_ids()
+
+    luaunit.assertItemsEquals(invalid_ids, {11})
+end
+
+function TestIdRange:test_find_p2_invalid_ids_two()
+    local range = day2.IdRange.new(998, 1012)
+    local invalid_ids = range:find_p2_invalid_ids()
+
+    luaunit.assertItemsEquals(invalid_ids, {999, 1010})
+end
+
+function TestIdRange:test_find_p2_invalid_ids_multi_repeater_length()
+    local range = day2.IdRange.new(1010010100, 1010110101)
+    local invalid_ids = range:find_p2_invalid_ids()
+
+    luaunit.assertItemsEquals(
+        invalid_ids,
+        {1010010100, 1010110101, 1010101010}
+    )
+end
+
 TestP1InvalidId = {}
 
 function TestP1InvalidId:test_next_from_any_before_same_size()
@@ -137,6 +168,87 @@ function TestP1InvalidId:test_next_more_digits()
     luaunit.assertItemsEquals(
         next,
         day2.P1InvalidId.new(100100)
+    )
+end
+
+TestNumString = {}
+
+function TestNumString:test_new()
+    local value = day2.NumString.new(100)
+    luaunit.assertEquals(value.value, 100)
+    luaunit.assertEquals(value.str, "100")
+end
+
+function TestNumString:test_from_str()
+    local value = day2.NumString.from_str("100")
+    luaunit.assertEquals(value.value, 100)
+    luaunit.assertEquals(value.str, "100")
+end
+
+function TestNumString:test_num_digits()
+    local value = day2.NumString.new(100)
+    luaunit.assertEquals(value:num_digits(), 3)
+end
+
+function TestNumString:test_first_n_digits()
+    local value = day2.NumString.new(12345)
+    luaunit.assertEquals(value:first_n_digits(2), "12")
+end
+
+TestP2InvalidIdRepeaterIterator = {}
+
+function TestP2InvalidIdRepeaterIterator:test_iterate_full_range()
+    local it = day2.P2InvalidIdRepeaterIterator.new(2, 4, day2.NumString.new(9500), day2.NumString.new(10000))
+    local values = {}
+    for value in it:iterate() do
+        values[#values + 1] = value
+    end
+    luaunit.assertItemsEquals(
+        values,
+        {9595, 9696, 9797, 9898, 9999}
+    )
+end
+
+function TestP2InvalidIdRepeaterIterator:test_iterate_exact()
+    local it = day2.P2InvalidIdRepeaterIterator.new(2, 4, day2.NumString.new(9595), day2.NumString.new(9595))
+    local values = {}
+    for value in it:iterate() do
+        values[#values + 1] = value
+    end
+    luaunit.assertItemsEquals(
+        values,
+        {9595}
+    )
+end
+
+function TestP2InvalidIdRepeaterIterator:test_iterate_none()
+    local it = day2.P2InvalidIdRepeaterIterator.new(2, 4, day2.NumString.new(9500), day2.NumString.new(9590))
+    local values = {}
+    for value in it:iterate() do
+        values[#values + 1] = value
+    end
+    luaunit.assertItemsEquals(
+        values,
+        {}
+    )
+end
+
+TestP2InvalidIdValueLenIterator = {}
+
+function TestP2InvalidIdValueLenIterator:test_iterate_one_valid_len()
+    local it = day2.P2InvalidIdValueLenIterator.new(4, day2.NumString.new(9500), day2.NumString.new(9999))
+    local values = it:search()
+    luaunit.assertItemsEquals(values, {
+        9595, 9696, 9797, 9898, 9999
+    })
+end
+
+function TestP2InvalidIdValueLenIterator:test_iterate_multi_valid_len()
+    local it = day2.P2InvalidIdValueLenIterator.new(10, day2.NumString.new(1010010100), day2.NumString.new(1010110101))
+    local invalid_ids = it:search()
+    luaunit.assertItemsEquals(
+        invalid_ids,
+        {1010010100, 1010110101, 1010101010}
     )
 end
 
