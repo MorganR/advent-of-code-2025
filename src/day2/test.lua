@@ -89,14 +89,11 @@ function TestP1InvalidId:test_next_from_any_before_odd_digits()
     luaunit.assertEquals(id.repeated_half, 1)
     luaunit.assertEquals(id.num_digits, 2)
 
-    local id = day2.P1InvalidId.next_from_any(919)
-    luaunit.assertEquals(id.value, 1010)
-    luaunit.assertEquals(id.value_str, "1010")
-    luaunit.assertEquals(id.repeated_half, 10)
-    luaunit.assertEquals(id.num_digits, 4)
-
-    local id = day2.P1InvalidId.next_from_any(1698522)
-    luaunit.assertEquals(id.value, 10001000)
+    local id = day2.P1InvalidId.next_from_any(99199)
+    luaunit.assertEquals(id.value, 100100)
+    luaunit.assertEquals(id.value_str, "100100")
+    luaunit.assertEquals(id.repeated_half, 100)
+    luaunit.assertEquals(id.num_digits, 6)
 end
 
 function TestP1InvalidId:test_next_from_any_is_invalid()
