@@ -3,7 +3,7 @@ struct BatteryBankSelection {
     /// The indices of the batteries to turn on in the bank.
     batteries: Vec<usize>,
     /// The joltage of this bank from turning on these batteries.
-    joltage: u64
+    joltage: u64,
 }
 
 impl BatteryBankSelection {
@@ -36,19 +36,28 @@ fn select_max_joltage(battery_bank: &str, num_batteries: u8) -> BatteryBankSelec
         }
     }
 
-    let joltage = selected_batteries.iter().fold(0u64, |acc, (_, c)| (acc * 10) + c.to_digit(10).unwrap() as u64);
+    let joltage = selected_batteries.iter().fold(0u64, |acc, (_, c)| {
+        (acc * 10) + c.to_digit(10).unwrap() as u64
+    });
 
     BatteryBankSelection::new(
         selected_batteries.iter().map(|(i, _)| *i).collect(),
-        joltage)
+        joltage,
+    )
 }
 
-/// Finds the best total joltage across all the battery banks by taking the 
+/// Finds the best total joltage across all the battery banks by taking the
 pub fn find_best_total_joltage(banks: &str, num_batteries_per_bank: u8) -> u64 {
-    let mut joltage = 0u64; 
+    let mut joltage = 0u64;
     for (i, bank) in banks.lines().enumerate() {
         let selection = select_max_joltage(bank, num_batteries_per_bank);
-        log::debug!("Selected {:?} (joltage: {}) for bank {} ({})", selection.batteries, selection.joltage, i, bank);
+        log::debug!(
+            "Selected {:?} (joltage: {}) for bank {} ({})",
+            selection.batteries,
+            selection.joltage,
+            i,
+            bank
+        );
         joltage += selection.joltage;
     }
     joltage
@@ -82,16 +91,10 @@ mod tests {
     #[test]
     fn select_max_joltage_all_same() {
         let selection = select_max_joltage("11111", 2);
-        assert_eq!(
-            11,
-            selection.joltage
-        );
+        assert_eq!(11, selection.joltage);
 
         let selection = select_max_joltage("11111111", 4);
-        assert_eq!(
-            1111,
-            selection.joltage
-        );
+        assert_eq!(1111, selection.joltage);
     }
 
     #[test]

@@ -1,6 +1,6 @@
+use clap::Parser;
 use std::error::Error;
 use std::io::{self, Read};
-use clap::Parser;
 
 mod days;
 mod utils;
@@ -42,12 +42,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             let joltage = days::day3::find_best_total_joltage(&input, 2);
             println!("Best total joltage: {}", joltage);
             Ok(())
-        },
+        }
         (3, 2) => {
             let joltage = days::day3::find_best_total_joltage(&input, 12);
             println!("Best total joltage: {}", joltage);
             Ok(())
         }
-        _ => return Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
+        (4, 1) => {
+            let count_accessible_rolls = days::day4::count_accessible_rolls_of_paper(&input)?;
+            println!(
+                "Count accessible rolls of paper: {}",
+                count_accessible_rolls
+            );
+            Ok(())
+        }
+        (4, 2) => {
+            let count_removable_rolls = days::day4::count_total_removable_rolls_of_paper(&input)?;
+            println!("Count removable rolls of paper: {}", count_removable_rolls);
+            Ok(())
+        }
+        _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }

@@ -2,3 +2,4 @@
 // Add day modules as they are implemented
 
 pub mod day3;
+pub mod day4;
