@@ -36,16 +36,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Dispatch to correct solver
     match (args.day, args.part) {
-        // Add day cases here as they are implemented
-        // Example:
-        // (1, 1) => {
-        //     let result = days::day01::solve_part1(&input)?;
-        //     println!("{}", result);
-        // },
-        // (1, 2) => {
-        //     let result = days::day01::solve_part2(&input)?;
-        //     println!("{}", result);
-        // },
+        (3, 1) => {
+            let joltage = days::day3::find_best_total_joltage(&input);
+            println!("Best total joltage: {}", joltage);
+            Ok(())
+        }
         _ => return Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }
