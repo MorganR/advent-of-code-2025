@@ -19,6 +19,8 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    env_logger::init();
+
     let args = Args::parse();
 
     // Validate day and part
@@ -37,7 +39,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Dispatch to correct solver
     match (args.day, args.part) {
         (3, 1) => {
-            let joltage = days::day3::find_best_total_joltage(&input);
+            let joltage = days::day3::find_best_total_joltage(&input, 2);
+            println!("Best total joltage: {}", joltage);
+            Ok(())
+        },
+        (3, 2) => {
+            let joltage = days::day3::find_best_total_joltage(&input, 12);
             println!("Best total joltage: {}", joltage);
             Ok(())
         }
