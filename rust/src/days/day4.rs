@@ -1,11 +1,5 @@
+use crate::utils::input::Error;
 use std::fmt::Display;
-use thiserror::Error as ThisError;
-
-#[derive(Debug, Clone, ThisError)]
-pub enum Error {
-    #[error("parse error: {0}")]
-    ParseError(String),
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Thing {

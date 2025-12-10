@@ -61,6 +61,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Count removable rolls of paper: {}", count_removable_rolls);
             Ok(())
         }
+        (5, 1) => {
+            let count_fresh = days::day5::count_fresh_ingredients(&input)?;
+            println!("{} ingredients are fresh", count_fresh);
+            Ok(())
+        }
+        (5, 2) => {
+            let count_fresh = days::day5::count_all_fresh_ids(&input)?;
+            println!("There are {} fresh IDs", count_fresh);
+            Ok(())
+        }
+        (6, 1) => {
+            let sum = days::day6::solve_and_sum_math_sheet(&input)?;
+            println!("Sum: {}", sum);
+            Ok(())
+        }
         _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }
