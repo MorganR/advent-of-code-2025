@@ -81,6 +81,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Sum: {}", sum);
             Ok(())
         }
+        (7, 1) => {
+            let count = days::day7::count_beam_splits(&input)?;
+            println!("Num beam splits: {}", count);
+            Ok(())
+        }
+        (7, 2) => {
+            let count = days::day7::count_timelines(&input)?;
+            println!("Num timelines: {}", count);
+            Ok(())
+        }
         _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }
