@@ -76,6 +76,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Sum: {}", sum);
             Ok(())
         }
+        (6, 2) => {
+            let sum = days::day6::solve_and_sum_cephalopod_math_sheet(&input)?;
+            println!("Sum: {}", sum);
+            Ok(())
+        }
         _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }

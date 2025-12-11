@@ -39,17 +39,13 @@ impl Range {
     }
 }
 
-fn is_in_ranges(value: u64, ordered_ranges: &Vec<Range>) -> bool {
+fn is_in_ranges(value: u64, ordered_ranges: &[Range]) -> bool {
     let find_result = ordered_ranges.binary_search_by(|range| range.compare_value(value).reverse());
     find_result.is_ok()
 }
 
 fn parse_ordered_ranges(input: &str) -> Result<Vec<Range>, Error> {
-    let ranges_result: Result<Vec<Range>, Error> = input
-        .lines()
-        .into_iter()
-        .map(|line| Range::parse(line))
-        .collect();
+    let ranges_result: Result<Vec<Range>, Error> = input.lines().map(Range::parse).collect();
     let mut ranges = ranges_result?;
 
     let mut did_merge = true;
@@ -112,7 +108,10 @@ pub fn count_fresh_ingredients(input: &str) -> Result<u64, Error> {
 }
 
 pub fn count_all_fresh_ids(input: &str) -> Result<u64, Error> {
-    let range_str = input.split("\n\n").next().map_or_else(|| Err(Error::ParseError(format!("invalid input: {}", input))), |v| Ok(v))?;
+    let range_str = input.split("\n\n").next().map_or_else(
+        || Err(Error::ParseError(format!("invalid input: {}", input))),
+        Ok,
+    )?;
     let ranges = parse_ordered_ranges(range_str)?;
 
     let mut count = 0;
