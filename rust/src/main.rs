@@ -98,6 +98,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Total: {}", total);
             Ok(())
         }
+        (8, 2) => {
+            let points = days::day8::parse_points(&input)?;
+            let total = days::day8::part2(&points);
+            println!("Total: {}", total);
+            Ok(())
+        }
         _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }
