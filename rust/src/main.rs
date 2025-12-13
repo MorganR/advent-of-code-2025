@@ -91,6 +91,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Num timelines: {}", count);
             Ok(())
         }
+        (8, 1) => {
+            let points = days::day8::parse_points(&input)?;
+            let total =
+                days::day8::multiply_n_largest_circuits_after_m_connections(3, 1000, &points);
+            println!("Total: {}", total);
+            Ok(())
+        }
         _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }
