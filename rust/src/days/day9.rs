@@ -159,6 +159,74 @@ struct SquarePolygon {
     grid: Vec<Vec<Color>>,
 }
 
+fn try_fill_shape(
+    rotation: Rotation,
+    line_directions: &[Direction],
+    lines: &[(&TilePoint, &TilePoint)],
+    grid: &mut Vec<Vec<Color>>,
+) -> bool {
+    let mut seen = HashSet::new();
+    let mut to_fill = Vec::new();
+    for (i, (start, end)) in lines.iter().enumerate() {
+        let line_direction = line_directions[i];
+        let fill_dir = line_direction.rotate(rotation);
+
+        for y in start.y.min(end.y)..=start.y.max(end.y) {
+            for x in start.x.min(end.x)..=start.x.max(end.x) {
+                if let Some(fill_point) = fill_dir.shift_point(&point![x, y]) {
+                    if let Some(row) = grid.get(fill_point.y) {
+                        if let Some(tile) = row.get(fill_point.x) {
+                            if *tile == Color::Other && !seen.contains(&fill_point) {
+                                to_fill.push(fill_point);
+                                seen.insert(fill_point);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fill the inside with green. Points in to_fill are already shifted by the offset.
+    // Try clockwise first, fail if we hit an edge.
+    let mut hit_edge = false;
+    while !to_fill.is_empty() {
+        let point = to_fill.pop().unwrap();
+        if grid[point.y][point.x] != Color::Other {
+            continue;
+        }
+        if point.y == 0 || point.y == grid.len() - 1 {
+            hit_edge = true;
+            break;
+        }
+        let row = grid.get_mut(point.y).unwrap();
+        if point.x == 0 || point.x == row.len() - 1 {
+            hit_edge = true;
+            break;
+        }
+        grid[point.y][point.x] = Color::Green;
+        for y in (point.y - 1)..=(point.y + 1) {
+            let row = grid.get(y).unwrap();
+            for x in (point.x - 1)..=(point.x + 1) {
+                let point = point![x, y];
+                if row[x] == Color::Other && !seen.contains(&point) {
+                    to_fill.push(point);
+                    seen.insert(point);
+                }
+            }
+        }
+    }
+
+    if hit_edge {
+        for to_clear in seen {
+            grid[to_clear.y][to_clear.x] = Color::Other;
+        }
+        false
+    } else {
+        true
+    }
+}
+
 impl SquarePolygon {
     fn from_connected_points(points: &[TilePoint]) -> Self {
         let min_x: usize = points.iter().map(|p| p.x).min().unwrap_or(0);
@@ -175,18 +243,21 @@ impl SquarePolygon {
             grid.push(row);
         }
 
+        log::info!("Drawing polygon's perimeter");
         // Draw the perimeter and determine the direction of each line.
         // The matching index in points corresponds to the end of the line.
         let mut line_directions = Vec::with_capacity(points.len());
-        let zero = point![0, 0];
         let line_ends: Vec<TilePoint> = points
             .iter()
             .map(|p| point![p.x - offset.x, p.y - offset.y])
             .collect();
-        let mut line_starts = Vec::with_capacity(line_ends.len());
-        line_starts.push(line_ends.last().unwrap_or(&zero));
-        line_starts.extend(line_ends.iter().take(line_ends.len() - 1));
-        for (start, end) in line_starts.iter().zip(line_ends.iter()) {
+        let lines: Vec<_> = line_ends
+            .last()
+            .into_iter()
+            .chain(line_ends.iter().take(line_ends.len() - 1))
+            .zip(line_ends.iter())
+            .collect();
+        for (start, end) in lines.iter() {
             let direction = Direction::from_start_to_end(start, end);
             line_directions.push(direction);
 
@@ -194,7 +265,7 @@ impl SquarePolygon {
                 let row = grid.get_mut(y).unwrap();
                 for x in start.x.min(end.x)..=start.x.max(end.x) {
                     let this_point = point![x, y];
-                    if this_point == **start || this_point == *end {
+                    if this_point == **start || this_point == **end {
                         row[x] = Color::Red;
                     } else {
                         row[x] = Color::Green;
@@ -203,91 +274,23 @@ impl SquarePolygon {
             }
         }
 
+        log::info!("Filling polygon");
         // Prepare the queue of the first line of inner points to fill.
-        let mut filled = HashSet::new();
-        let mut cw_fill = Vec::new();
-        let mut ccw_fill = Vec::new();
-        for (i, (start, end)) in line_starts.iter().zip(line_ends.iter()).enumerate() {
-            let line_direction = line_directions[i];
-            let cw_dir = line_direction.rotate(Rotation::Clockwise);
-            let ccw_dir = line_direction.rotate(Rotation::CounterClockwise);
-
-            for y in start.y.min(end.y)..=start.y.max(end.y) {
-                for x in start.x.min(end.x)..=start.x.max(end.x) {
-                    if let Some(fill_point) = cw_dir.shift_point(&point![x, y]) {
-                        if let Some(row) = grid.get(fill_point.y) {
-                            if let Some(tile) = row.get(fill_point.x) {
-                                if *tile == Color::Other {
-                                    cw_fill.push(fill_point);
-                                }
-                            }
-                        }
-                    }
-                    if let Some(fill_point) = ccw_dir.shift_point(&point![x, y]) {
-                        if let Some(row) = grid.get(fill_point.y) {
-                            if let Some(tile) = row.get(fill_point.x) {
-                                if *tile == Color::Other {
-                                    ccw_fill.push(fill_point);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Fill the inside with green. Points in to_fill are already shifted by the offset.
-        // Try clockwise first, fail if we hit an edge.
-        let mut hit_edge = false;
-        while !cw_fill.is_empty() {
-            let point = cw_fill.pop().unwrap();
-            if grid[point.y][point.x] != Color::Other {
-                continue;
-            }
-            if point.y == 0 || point.y == grid.len() - 1 {
-                hit_edge = true;
-                break;
-            }
-            let row = grid.get_mut(point.y).unwrap();
-            if point.x == 0 || point.x == row.len() - 1 {
-                hit_edge = true;
-                break;
-            }
-            grid[point.y][point.x] = Color::Green;
-            filled.insert(point);
-            for y in (point.y - 1)..=(point.y + 1) {
-                let row = grid.get(y).unwrap();
-                for x in (point.x - 1)..=(point.x + 1) {
-                    if row[x] == Color::Other {
-                        cw_fill.push(point![x, y]);
-                    }
-                }
-            }
-        }
-
-        if !hit_edge {
+        if try_fill_shape(Rotation::Clockwise, &line_directions, &lines, &mut grid) {
             log::info!("Filled polygon clockwise");
-            return Self { offset, grid };
-        }
-        log::info!("Filling polygon clockwise failed; trying counter clockwise");
-
-        for point in filled {
-            grid[point.y][point.x] = Color::Other;
-        }
-
-        while !ccw_fill.is_empty() {
-            let point = ccw_fill.pop().unwrap();
-            if grid[point.y][point.x] != Color::Other {
-                continue;
-            }
-            grid[point.y][point.x] = Color::Green;
-            for y in (point.y - 1)..=(point.y + 1) {
-                let row = grid.get(y).unwrap();
-                for x in (point.x - 1)..=(point.x + 1) {
-                    if row[x] == Color::Other {
-                        ccw_fill.push(point![x, y]);
-                    }
-                }
+        } else {
+            log::info!("Filling polygon clockwise failed; trying counter clockwise");
+            if !try_fill_shape(
+                Rotation::CounterClockwise,
+                &line_directions,
+                &lines,
+                &mut grid,
+            ) {
+                let result_for_formatting = Self { offset, grid };
+                panic!(
+                    "Failed to build polygon, perimeter-only grid: {}",
+                    &result_for_formatting
+                );
             }
         }
 
@@ -313,12 +316,12 @@ impl SquarePolygon {
 
 impl Display for SquarePolygon {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Offset: ({},{})\n", self.offset.x, self.offset.y)?;
+        write!(f, "Offset: ({},{})", self.offset.x, self.offset.y)?;
         for row in &self.grid {
+            write!(f, "\n")?;
             for tile in row {
                 write!(f, "{}", tile)?;
             }
-            write!(f, "\n")?;
         }
         Ok(())
     }
@@ -352,8 +355,10 @@ fn all_perimeter_inside_shape(a: &TilePoint, b: &TilePoint, shape: &SquarePolygo
 }
 
 fn largest_green_red_rectangle_with_corners(points: &[TilePoint]) -> [TilePoint; 2] {
+    log::info!("Constructing polygon");
     let shape = SquarePolygon::from_connected_points(points);
 
+    log::info!("Finding largest valid rectangle");
     let mut largest_area = 0;
     let mut largest_rectangle = [point![0, 0], point![0, 0]];
 
@@ -403,6 +408,7 @@ pub fn part1(input: &str) -> Result<i64, Error> {
 }
 
 pub fn part2(input: &str) -> Result<i64, Error> {
+    log::info!("Parsing points");
     let points = parse_points(input)?;
     let largest_rectangle = largest_green_red_rectangle_with_corners(&points);
     Ok(rectangle_area(&largest_rectangle[0], &largest_rectangle[1]))
@@ -452,8 +458,7 @@ mod tests {
 XXXXXXXXXX
 #XXXXXX#XX
 .......XXX
-.......#X#
-"
+.......#X#"
         );
     }
 
