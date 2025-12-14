@@ -1,16 +1,15 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::ops::{Add, Deref};
+use std::collections::HashSet;
+use std::fmt::{Debug, Display};
 
-use nalgebra::{Point2, point, try_invert_to};
+use nalgebra::{Point2, point};
 
 use crate::utils::input::Error;
 
 type TilePoint = Point2<usize>;
 
 fn rectangle_area(a: &TilePoint, b: &TilePoint) -> i64 {
-    let width = a.x - b.x;
-    let height = a.y - b.y;
+    let width = a.x.max(b.x) - b.x.min(a.x);
+    let height = a.y.max(b.y) - b.y.min(a.y);
     // Rectangles are inclusive, so add 1.
     ((width as i64) + 1) * ((height as i64) + 1)
 }
@@ -42,6 +41,16 @@ enum Color {
     Other,
 }
 
+impl Display for Color {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match *self {
+            Self::Red => "#",
+            Self::Green => "X",
+            Self::Other => ".",
+        })
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum Rotation {
     Clockwise,
@@ -54,7 +63,7 @@ enum Direction {
     Left,
     Right,
     Up,
-    Down
+    Down,
 }
 
 impl Direction {
@@ -77,33 +86,33 @@ impl Direction {
     fn is_horizontal(&self) -> bool {
         match self {
             Self::Left | Self::Right => true,
-            _ => false
+            _ => false,
         }
     }
 
     fn is_vertical(&self) -> bool {
         match self {
             Self::Up | Self::Down => true,
-            _ => false
+            _ => false,
         }
     }
 
     fn is_right_of(&self, other: Direction) -> bool {
         match (*self, other) {
-            (Self::Left, Self::Down) |
-            (Self::Up, Self::Left) |
-            (Self::Right, Self::Up) |
-            (Self::Down, Self::Right) => true,
+            (Self::Left, Self::Down)
+            | (Self::Up, Self::Left)
+            | (Self::Right, Self::Up)
+            | (Self::Down, Self::Right) => true,
             _ => false,
         }
     }
 
     fn is_left_of(&self, other: Direction) -> bool {
         match (*self, other) {
-            (Self::Down, Self::Left) |
-            (Self::Right, Self::Down) |
-            (Self::Up, Self::Right) |
-            (Self::Left, Self::Up) => true,
+            (Self::Down, Self::Left)
+            | (Self::Right, Self::Down)
+            | (Self::Up, Self::Right)
+            | (Self::Left, Self::Up) => true,
             _ => false,
         }
     }
@@ -130,7 +139,7 @@ impl Direction {
                 } else {
                     Some(point![point.x - 1, point.y])
                 }
-            },
+            }
             Self::Right => Some(point![point.x + 1, point.y]),
             Self::Up => {
                 if point.y == 0 {
@@ -138,7 +147,7 @@ impl Direction {
                 } else {
                     Some(point![point.x, point.y - 1])
                 }
-            },
+            }
             Self::Down => Some(point![point.x, point.y + 1]),
         }
     }
@@ -166,79 +175,123 @@ impl SquarePolygon {
             grid.push(row);
         }
 
-        // Draw the perimeter and determine the fill side.
-        let mut count_left_turns = 0;
-        let mut count_right_turns = 0;
-        let mut last_direction = None;
+        // Draw the perimeter and determine the direction of each line.
+        // The matching index in points corresponds to the end of the line.
+        let mut line_directions = Vec::with_capacity(points.len());
         let zero = point![0, 0];
-        let mut last = points.first().unwrap_or(&zero);
-        for point in points.iter().skip(1) {
-            let direction = Direction::from_start_to_end(last, point); 
-            if let Some(ld) = last_direction {
-                if direction.is_right_of(ld) {
-                    count_right_turns += 1;
-                } else if direction.is_left_of(ld) {
-                    count_left_turns += 1;
-                }
-                // Ignore if it's a 180 degree turn.
-            }
-            last_direction = Some(direction);
+        let line_ends: Vec<TilePoint> = points
+            .iter()
+            .map(|p| point![p.x - offset.x, p.y - offset.y])
+            .collect();
+        let mut line_starts = Vec::with_capacity(line_ends.len());
+        line_starts.push(line_ends.last().unwrap_or(&zero));
+        line_starts.extend(line_ends.iter().take(line_ends.len() - 1));
+        for (start, end) in line_starts.iter().zip(line_ends.iter()) {
+            let direction = Direction::from_start_to_end(start, end);
+            line_directions.push(direction);
 
-            for y in (last.y - offset.y)..=(point.y - offset.y) {
+            for y in start.y.min(end.y)..=start.y.max(end.y) {
                 let row = grid.get_mut(y).unwrap();
-                for x in (last.x - offset.x)..=(point.x - offset.x) {
-                    if point![x, y] == *last || point![x, y] == *point {
+                for x in start.x.min(end.x)..=start.x.max(end.x) {
+                    let this_point = point![x, y];
+                    if this_point == **start || this_point == *end {
                         row[x] = Color::Red;
                     } else {
                         row[x] = Color::Green;
                     }
                 }
             }
-            last = point;
         }
 
-        // Queue up all points in the inner circumference for filling with green.
-        let rotation = if count_left_turns > count_right_turns {
-            Rotation::CounterClockwise
-        } else {
-            Rotation::Clockwise
-        };
+        // Prepare the queue of the first line of inner points to fill.
+        let mut filled = HashSet::new();
+        let mut cw_fill = Vec::new();
+        let mut ccw_fill = Vec::new();
+        for (i, (start, end)) in line_starts.iter().zip(line_ends.iter()).enumerate() {
+            let line_direction = line_directions[i];
+            let cw_dir = line_direction.rotate(Rotation::Clockwise);
+            let ccw_dir = line_direction.rotate(Rotation::CounterClockwise);
 
-        let mut to_fill = Vec::new();
-        last = points.first().unwrap_or(&zero);
-        for point in points.iter().skip(1) {
-            let line_direction = Direction::from_start_to_end(last, point);
-            let fill_side = line_direction.rotate(rotation);
-            for y in (last.y - offset.y)..=(point.y - offset.y) {
-                for x in (last.x - offset.x)..=(point.x - offset.x) {
-                    if let Some(point_to_fill) = fill_side.shift_point(&point![x, y]) {
-                        to_fill.push(point_to_fill);
+            for y in start.y.min(end.y)..=start.y.max(end.y) {
+                for x in start.x.min(end.x)..=start.x.max(end.x) {
+                    if let Some(fill_point) = cw_dir.shift_point(&point![x, y]) {
+                        if let Some(row) = grid.get(fill_point.y) {
+                            if let Some(tile) = row.get(fill_point.x) {
+                                if *tile == Color::Other {
+                                    cw_fill.push(fill_point);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(fill_point) = ccw_dir.shift_point(&point![x, y]) {
+                        if let Some(row) = grid.get(fill_point.y) {
+                            if let Some(tile) = row.get(fill_point.x) {
+                                if *tile == Color::Other {
+                                    ccw_fill.push(fill_point);
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
         // Fill the inside with green. Points in to_fill are already shifted by the offset.
-        while !to_fill.is_empty() {
-            let point = to_fill.pop().unwrap();
+        // Try clockwise first, fail if we hit an edge.
+        let mut hit_edge = false;
+        while !cw_fill.is_empty() {
+            let point = cw_fill.pop().unwrap();
             if grid[point.y][point.x] != Color::Other {
                 continue;
             }
+            if point.y == 0 || point.y == grid.len() - 1 {
+                hit_edge = true;
+                break;
+            }
+            let row = grid.get_mut(point.y).unwrap();
+            if point.x == 0 || point.x == row.len() - 1 {
+                hit_edge = true;
+                break;
+            }
             grid[point.y][point.x] = Color::Green;
-            for y in (point.y.max(1) - 1)..=(point.y+1) {
-                let row = grid.get_mut(y).unwrap();
-                for x in (point.x.max(1) - 1)..=(point.x + 1) {
+            filled.insert(point);
+            for y in (point.y - 1)..=(point.y + 1) {
+                let row = grid.get(y).unwrap();
+                for x in (point.x - 1)..=(point.x + 1) {
                     if row[x] == Color::Other {
-                        to_fill.push(point![x, y]);
+                        cw_fill.push(point![x, y]);
                     }
                 }
             }
         }
 
-        Self {
-            offset,
-            grid
+        if !hit_edge {
+            log::info!("Filled polygon clockwise");
+            return Self { offset, grid };
         }
+        log::info!("Filling polygon clockwise failed; trying counter clockwise");
+
+        for point in filled {
+            grid[point.y][point.x] = Color::Other;
+        }
+
+        while !ccw_fill.is_empty() {
+            let point = ccw_fill.pop().unwrap();
+            if grid[point.y][point.x] != Color::Other {
+                continue;
+            }
+            grid[point.y][point.x] = Color::Green;
+            for y in (point.y - 1)..=(point.y + 1) {
+                let row = grid.get(y).unwrap();
+                for x in (point.x - 1)..=(point.x + 1) {
+                    if row[x] == Color::Other {
+                        ccw_fill.push(point![x, y]);
+                    }
+                }
+            }
+        }
+
+        Self { offset, grid }
     }
 
     fn color_at(&self, point: &TilePoint) -> Color {
@@ -246,7 +299,9 @@ impl SquarePolygon {
             return Color::Other;
         }
 
-        *self.grid.get(point.y - self.offset.y)
+        *self
+            .grid
+            .get(point.y - self.offset.y)
             .and_then(|row| row.get(point.x - self.offset.x))
             .unwrap_or(&Color::Other)
     }
@@ -256,21 +311,38 @@ impl SquarePolygon {
     }
 }
 
+impl Display for SquarePolygon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Offset: ({},{})\n", self.offset.x, self.offset.y)?;
+        for row in &self.grid {
+            for tile in row {
+                write!(f, "{}", tile)?;
+            }
+            write!(f, "\n")?;
+        }
+        Ok(())
+    }
+}
+
 fn all_perimeter_inside_shape(a: &TilePoint, b: &TilePoint, shape: &SquarePolygon) -> bool {
     // Iterate y separately since these can follow a single vector (better CPU caching).
-    for x in a.x..=b.x {
+    let min_x = a.x.min(b.x);
+    let max_x = a.x.max(b.x);
+    let min_y = a.y.min(b.y);
+    let max_y = a.y.max(b.y);
+    for x in min_x..=max_x {
         if !shape.is_inside_shape(&point![x, a.y]) {
             return false;
         }
     }
-    for x in a.x..=b.x {
+    for x in min_x..=max_x {
         if !shape.is_inside_shape(&point![x, b.y]) {
             return false;
         }
     }
-    
+
     // Iterate x together since these have to jump rows anyway.
-    for y in a.y..=b.y {
+    for y in min_y..=max_y {
         if !shape.is_inside_shape(&point![a.x, y]) || !shape.is_inside_shape(&point![b.x, y]) {
             return false;
         }
@@ -289,7 +361,6 @@ fn largest_green_red_rectangle_with_corners(points: &[TilePoint]) -> [TilePoint;
         let a = points[i];
         for j in (i + 1)..points.len() {
             let b = points[j];
-
 
             let area = rectangle_area(&a, &b);
             if area > largest_area && all_perimeter_inside_shape(&a, &b, &shape) {
@@ -333,7 +404,7 @@ pub fn part1(input: &str) -> Result<i64, Error> {
 
 pub fn part2(input: &str) -> Result<i64, Error> {
     let points = parse_points(input)?;
-    let largest_rectangle = largest_rectangle_with_corners(&points);
+    let largest_rectangle = largest_green_red_rectangle_with_corners(&points);
     Ok(rectangle_area(&largest_rectangle[0], &largest_rectangle[1]))
 }
 
@@ -356,6 +427,34 @@ mod tests {
         let [a, b] = largest_rectangle_with_corners(&points);
 
         assert_eq!(rectangle_area(&a, &b), 50);
+    }
+
+    #[test]
+    fn test_polygon_construction() {
+        let points = [
+            point!(7, 1),
+            point!(11, 1),
+            point!(11, 7),
+            point!(9, 7),
+            point!(9, 5),
+            point!(2, 5),
+            point!(2, 3),
+            point!(7, 3),
+        ];
+        let shape = SquarePolygon::from_connected_points(&points);
+
+        assert_eq!(
+            format!("{}", &shape),
+            "Offset: (2,1)
+.....#XXX#
+.....XXXXX
+#XXXX#XXXX
+XXXXXXXXXX
+#XXXXXX#XX
+.......XXX
+.......#X#
+"
+        );
     }
 
     #[test]

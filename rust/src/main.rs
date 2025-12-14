@@ -109,6 +109,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Largest area: {}", largest_area);
             Ok(())
         }
+        (9, 2) => {
+            let largest_area = days::day9::part2(&input)?;
+            println!("Largest area: {}", largest_area);
+            Ok(())
+        }
         _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }
