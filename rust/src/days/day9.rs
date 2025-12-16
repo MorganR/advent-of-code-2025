@@ -1,5 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
+use std::os::unix::net::Incoming;
 
 use nalgebra::{Point2, point};
 
@@ -83,6 +84,10 @@ impl Direction {
         }
     }
 
+    fn from_line_tuple(line: &(TilePoint, TilePoint)) -> Self {
+        return Self::from_start_to_end(&line.0, &line.1);
+    }
+
     fn is_horizontal(&self) -> bool {
         match self {
             Self::Left | Self::Right => true,
@@ -155,203 +160,146 @@ impl Direction {
 
 /// A polygon made only of square angled (90 degree) edges.
 struct SquarePolygon {
-    offset: TilePoint,
-    grid: Vec<Vec<Color>>,
-}
-
-fn try_fill_shape(
-    rotation: Rotation,
-    line_directions: &[Direction],
-    lines: &[(&TilePoint, &TilePoint)],
-    grid: &mut Vec<Vec<Color>>,
-) -> bool {
-    let mut seen = HashSet::new();
-    let mut to_fill = Vec::new();
-    for (i, (start, end)) in lines.iter().enumerate() {
-        let line_direction = line_directions[i];
-        let fill_dir = line_direction.rotate(rotation);
-
-        for y in start.y.min(end.y)..=start.y.max(end.y) {
-            for x in start.x.min(end.x)..=start.x.max(end.x) {
-                if let Some(fill_point) = fill_dir.shift_point(&point![x, y]) {
-                    if let Some(row) = grid.get(fill_point.y) {
-                        if let Some(tile) = row.get(fill_point.x) {
-                            if *tile == Color::Other && !seen.contains(&fill_point) {
-                                to_fill.push(fill_point);
-                                seen.insert(fill_point);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Fill the inside with green. Points in to_fill are already shifted by the offset.
-    // Try clockwise first, fail if we hit an edge.
-    let mut hit_edge = false;
-    while !to_fill.is_empty() {
-        let point = to_fill.pop().unwrap();
-        if grid[point.y][point.x] != Color::Other {
-            continue;
-        }
-        if point.y == 0 || point.y == grid.len() - 1 {
-            hit_edge = true;
-            break;
-        }
-        let row = grid.get_mut(point.y).unwrap();
-        if point.x == 0 || point.x == row.len() - 1 {
-            hit_edge = true;
-            break;
-        }
-        grid[point.y][point.x] = Color::Green;
-        for y in (point.y - 1)..=(point.y + 1) {
-            let row = grid.get(y).unwrap();
-            for x in (point.x - 1)..=(point.x + 1) {
-                let point = point![x, y];
-                if row[x] == Color::Other && !seen.contains(&point) {
-                    to_fill.push(point);
-                    seen.insert(point);
-                }
-            }
-        }
-    }
-
-    if hit_edge {
-        for to_clear in seen {
-            grid[to_clear.y][to_clear.x] = Color::Other;
-        }
-        false
-    } else {
-        true
-    }
+    line_index_by_ends: HashMap<TilePoint, usize>,
+    lines: Vec<(TilePoint, TilePoint)>,
+    line_directions: Vec<Direction>,
+    fill_rotation: Rotation,
 }
 
 impl SquarePolygon {
     fn from_connected_points(points: &[TilePoint]) -> Self {
-        let min_x: usize = points.iter().map(|p| p.x).min().unwrap_or(0);
-        let max_x: usize = points.iter().map(|p| p.x).max().unwrap_or(0);
-        let min_y: usize = points.iter().map(|p| p.y).min().unwrap_or(0);
-        let max_y: usize = points.iter().map(|p| p.y).max().unwrap_or(0);
-        let offset = TilePoint::new(min_x, min_y);
-        let mut grid = Vec::with_capacity(max_y - min_y + 1);
-        for _y in 0..=(max_y - min_y) {
-            let mut row = Vec::with_capacity(max_x - min_x + 1);
-            for _x in 0..=(max_x - min_x) {
-                row.push(Color::Other);
-            }
-            grid.push(row);
-        }
-
         log::info!("Drawing polygon's perimeter");
         // Draw the perimeter and determine the direction of each line.
         // The matching index in points corresponds to the end of the line.
         let mut line_directions = Vec::with_capacity(points.len());
-        let line_ends: Vec<TilePoint> = points
-            .iter()
-            .map(|p| point![p.x - offset.x, p.y - offset.y])
-            .collect();
-        let lines: Vec<_> = line_ends
+        let mut number_left_turns = 0;
+        let mut number_right_turns = 0;
+        let lines: Vec<_> = points
             .last()
             .into_iter()
-            .chain(line_ends.iter().take(line_ends.len() - 1))
-            .zip(line_ends.iter())
+            .chain(points.iter().take(points.len() - 1))
+            .zip(points.iter())
+            .map(|(&a, &b)| (a, b))
             .collect();
+        let line_index_by_ends: HashMap<_, _> =
+            points.iter().enumerate().map(|(i, &a)| (a, i)).collect();
         for (start, end) in lines.iter() {
             let direction = Direction::from_start_to_end(start, end);
             line_directions.push(direction);
-
-            for y in start.y.min(end.y)..=start.y.max(end.y) {
-                let row = grid.get_mut(y).unwrap();
-                for x in start.x.min(end.x)..=start.x.max(end.x) {
-                    let this_point = point![x, y];
-                    if this_point == **start || this_point == **end {
-                        row[x] = Color::Red;
-                    } else {
-                        row[x] = Color::Green;
-                    }
+            if line_directions.len() > 1 {
+                let last_direction = line_directions[line_directions.len() - 2];
+                if direction.is_right_of(last_direction) {
+                    number_right_turns += 1;
+                } else if direction.is_left_of(last_direction) {
+                    number_left_turns += 1;
                 }
             }
         }
 
-        log::info!("Filling polygon");
-        // Prepare the queue of the first line of inner points to fill.
-        if try_fill_shape(Rotation::Clockwise, &line_directions, &lines, &mut grid) {
-            log::info!("Filled polygon clockwise");
+        if let Some(first_direction) = line_directions.first() {
+            if let Some(last_direction) = line_directions.last() {
+                if first_direction.is_right_of(*last_direction) {
+                    number_right_turns += 1;
+                } else if first_direction.is_left_of(*last_direction) {
+                    number_left_turns += 1;
+                }
+            }
+        }
+
+        let fill_rotation = if number_right_turns > number_left_turns {
+            Rotation::Clockwise
         } else {
-            log::info!("Filling polygon clockwise failed; trying counter clockwise");
-            if !try_fill_shape(
-                Rotation::CounterClockwise,
-                &line_directions,
-                &lines,
-                &mut grid,
-            ) {
-                let result_for_formatting = Self { offset, grid };
-                panic!(
-                    "Failed to build polygon, perimeter-only grid: {}",
-                    &result_for_formatting
-                );
+            Rotation::CounterClockwise
+        };
+
+        Self {
+            line_index_by_ends,
+            lines,
+            line_directions,
+            fill_rotation,
+        }
+    }
+
+    fn is_rectangle_fully_inside(&self, a: &TilePoint, b: &TilePoint) -> bool {
+        let (min_x, max_x) = if a.x < b.x { (a.x, b.x) } else { (b.x, a.x) };
+        let (min_y, max_y) = if a.y < b.y { (a.y, b.y) } else { (b.y, a.y) };
+
+        // If any line immediately connected to the points is coincident with the rectangle,
+        // it must put the rectangle on its fill side.
+        // If none are coincident, then all must put the rectangle on their fill side.
+        // This can be assessed on a single corner to fully satisfy this condition.
+
+        let horizontal_line_to_point = (point![b.x, a.y], point![a.x, a.y]);
+        let vertical_line_to_point = (point![a.x, b.y], point![a.x, a.y]);
+        let horizontal_line_from_point = (point![a.x, a.y], point![b.x, a.y]);
+        let vertical_line_from_point = (point![a.x, a.y], point![a.x, b.y]);
+        let direction_to_corner_x = Direction::from_line_tuple(&horizontal_line_to_point);
+        let direction_to_corner_y = Direction::from_line_tuple(&vertical_line_to_point);
+        let direction_of_rect_x = Direction::from_line_tuple(&horizontal_line_from_point);
+        let direction_of_rect_y = Direction::from_line_tuple(&vertical_line_from_point);
+
+        let incoming_idx = self.line_index_by_ends[a];
+        debug_assert_eq!(&self.lines[incoming_idx].1, a);
+        let incoming_direction = self.line_directions[incoming_idx];
+        let incoming_fill_direction = incoming_direction.rotate(self.fill_rotation);
+        let incoming_is_coincident = incoming_direction == direction_to_corner_x
+            || incoming_direction == direction_to_corner_y;
+        let is_fill_side_of_incoming = (incoming_direction.is_horizontal()
+            && direction_of_rect_y == incoming_fill_direction)
+            || (incoming_direction.is_vertical() && direction_of_rect_x == incoming_fill_direction);
+
+        let outgoing_idx = if (incoming_idx + 1) == self.lines.len() {
+            0
+        } else {
+            incoming_idx + 1
+        };
+        debug_assert_eq!(&self.lines[outgoing_idx].0, a);
+        let outgoing_direction = self.line_directions[outgoing_idx];
+        let outgoing_fill_direction = outgoing_direction.rotate(self.fill_rotation);
+        let outgoing_is_coincident =
+            outgoing_direction == direction_of_rect_x || outgoing_direction == direction_of_rect_y;
+        let is_fill_side_of_outgoing = (outgoing_direction.is_horizontal()
+            && direction_of_rect_y == outgoing_fill_direction)
+            || (outgoing_direction.is_vertical() && direction_of_rect_x == outgoing_fill_direction);
+
+        let has_shape_overlap_beyond_border = (incoming_is_coincident && is_fill_side_of_incoming)
+            || (outgoing_is_coincident && is_fill_side_of_outgoing)
+            || (is_fill_side_of_incoming && is_fill_side_of_outgoing);
+        if !has_shape_overlap_beyond_border {
+            return false;
+        }
+
+        // Now check if any lines cross the border of the rectangle.
+        for (line, &direction) in self.lines.iter().zip(self.line_directions.iter()) {
+            if direction.is_vertical() {
+                if line.0.x <= min_x || line.0.x >= max_x {
+                    // This line can't hit the rectangle.
+                    continue;
+                }
+                let line_min_y = line.0.y.min(line.1.y);
+                let line_max_y = line.0.y.max(line.1.y);
+                if line_min_y >= max_y || line_max_y <= min_y {
+                    continue;
+                }
+                // This line intersects the rectangle (beyond the border).
+                return false;
+            } else {
+                if line.0.y <= min_y || line.0.y >= max_y {
+                    // This line can't hit the rectangle.
+                    continue;
+                }
+                let line_min_x = line.0.x.min(line.1.x);
+                let line_max_x = line.0.x.max(line.1.x);
+                if line_min_x >= max_x || line_max_x <= min_x {
+                    continue;
+                }
+                // This line intersects the rectangle (beyond the border).
+                return false;
             }
         }
 
-        Self { offset, grid }
+        true
     }
-
-    fn color_at(&self, point: &TilePoint) -> Color {
-        if point.x < self.offset.x || point.y < self.offset.y {
-            return Color::Other;
-        }
-
-        *self
-            .grid
-            .get(point.y - self.offset.y)
-            .and_then(|row| row.get(point.x - self.offset.x))
-            .unwrap_or(&Color::Other)
-    }
-
-    fn is_inside_shape(&self, point: &TilePoint) -> bool {
-        self.color_at(point) != Color::Other
-    }
-}
-
-impl Display for SquarePolygon {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Offset: ({},{})", self.offset.x, self.offset.y)?;
-        for row in &self.grid {
-            write!(f, "\n")?;
-            for tile in row {
-                write!(f, "{}", tile)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-fn all_perimeter_inside_shape(a: &TilePoint, b: &TilePoint, shape: &SquarePolygon) -> bool {
-    // Iterate y separately since these can follow a single vector (better CPU caching).
-    let min_x = a.x.min(b.x);
-    let max_x = a.x.max(b.x);
-    let min_y = a.y.min(b.y);
-    let max_y = a.y.max(b.y);
-    for x in min_x..=max_x {
-        if !shape.is_inside_shape(&point![x, a.y]) {
-            return false;
-        }
-    }
-    for x in min_x..=max_x {
-        if !shape.is_inside_shape(&point![x, b.y]) {
-            return false;
-        }
-    }
-
-    // Iterate x together since these have to jump rows anyway.
-    for y in min_y..=max_y {
-        if !shape.is_inside_shape(&point![a.x, y]) || !shape.is_inside_shape(&point![b.x, y]) {
-            return false;
-        }
-    }
-
-    true
 }
 
 fn largest_green_red_rectangle_with_corners(points: &[TilePoint]) -> [TilePoint; 2] {
@@ -368,7 +316,13 @@ fn largest_green_red_rectangle_with_corners(points: &[TilePoint]) -> [TilePoint;
             let b = points[j];
 
             let area = rectangle_area(&a, &b);
-            if area > largest_area && all_perimeter_inside_shape(&a, &b, &shape) {
+            if area > largest_area && shape.is_rectangle_fully_inside(&a, &b) {
+                log::debug!(
+                    "Found largest rectangle so far (area: {}) at ({}, {})",
+                    area,
+                    &a,
+                    &b
+                );
                 largest_rectangle = [a, b];
                 largest_area = area;
             }
@@ -437,29 +391,107 @@ mod tests {
 
     #[test]
     fn test_polygon_construction() {
-        let points = [
-            point!(7, 1),
-            point!(11, 1),
-            point!(11, 7),
-            point!(9, 7),
-            point!(9, 5),
-            point!(2, 5),
-            point!(2, 3),
-            point!(7, 3),
-        ];
+        let points = [point!(7, 5), point!(2, 5), point!(2, 3), point!(7, 3)];
         let shape = SquarePolygon::from_connected_points(&points);
 
+        assert_eq!(shape.fill_rotation, Rotation::Clockwise);
         assert_eq!(
-            format!("{}", &shape),
-            "Offset: (2,1)
-.....#XXX#
-.....XXXXX
-#XXXX#XXXX
-XXXXXXXXXX
-#XXXXXX#XX
-.......XXX
-.......#X#"
+            shape.lines,
+            vec![
+                (points[3], points[0]),
+                (points[0], points[1]),
+                (points[1], points[2]),
+                (points[2], points[3]),
+            ],
         );
+        assert_eq!(
+            shape.line_directions,
+            vec![
+                Direction::Down,
+                Direction::Left,
+                Direction::Up,
+                Direction::Right,
+            ]
+        )
+    }
+
+    #[test]
+    fn test_is_rectangle_fully_inside_polygon() {
+        let points = vec![
+            point![0, 4],  // Left arm, top corner.
+            point![4, 4],  // Top left of center.
+            point![4, 0],  // Top arm, left corner.
+            point![8, 0],  // Top arm, right corner.
+            point![8, 4],  // Top right of center.
+            point![12, 4], // Right arm, top corner.
+            point![12, 8], // Right arm, bottom corner.
+            point![8, 8],  // Bottom right of center.
+            point![8, 12], // Bottom arm, right corner.
+            point![4, 12], // Bottom arm, left corner.
+            point![4, 8],  // Bottom left of center.
+            point![0, 8],  // Left arm, bottom corner.
+        ];
+        let cross = SquarePolygon::from_connected_points(&points);
+        assert_eq!(cross.fill_rotation, Rotation::Clockwise);
+
+        let fully_inside_rectangles = vec![
+            (
+                point![0, 4],
+                point![12, 8],
+                "tl to br fully connected inside",
+            ),
+            (
+                point![0, 8],
+                point![12, 4],
+                "bl to tr fully connected inside",
+            ),
+            (
+                point![0, 4],
+                point![8, 8],
+                "tl connect to br disconnected a",
+            ),
+            (
+                point![0, 4],
+                point![4, 8],
+                "tl connect to br disconnected b",
+            ),
+        ];
+        for (a, b, name) in fully_inside_rectangles {
+            assert!(cross.is_rectangle_fully_inside(&a, &b), "{}", name);
+            assert!(
+                cross.is_rectangle_fully_inside(&b, &a),
+                "{} - backwards",
+                name
+            );
+        }
+
+        let fully_outside_rectangles = vec![
+            (point![0, 4], point![4, 0], "top left outside"),
+            (point![8, 0], point![12, 4], "top right outside"),
+            (point![12, 8], point![8, 12], "bottom right outside"),
+            (point![4, 12], point![0, 8], "bottom left outside"),
+        ];
+        for (a, b, name) in fully_outside_rectangles {
+            assert!(!cross.is_rectangle_fully_inside(&a, &b), "{}", name);
+            assert!(
+                !cross.is_rectangle_fully_inside(&b, &a),
+                "{} - backwards",
+                name
+            );
+        }
+
+        let mixed_rectangles = vec![
+            (point![0, 4], point![8, 0], "top left mixed"),
+            (point![12, 8], point![4, 12], "bottom right mixed"),
+        ];
+        for (a, b, name) in mixed_rectangles {
+            assert!(!cross.is_rectangle_fully_inside(&a, &b), "{}", name);
+            assert!(
+                !cross.is_rectangle_fully_inside(&b, &a),
+                "{} - backwards",
+                name
+            );
+        }
     }
 
     #[test]
