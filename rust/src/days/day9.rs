@@ -1,6 +1,5 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Display};
-use std::os::unix::net::Incoming;
+use std::collections::HashMap;
+use std::fmt::Debug;
 
 use nalgebra::{Point2, point};
 
@@ -21,35 +20,16 @@ fn largest_rectangle_with_corners(points: &[TilePoint]) -> [TilePoint; 2] {
 
     for i in 0..points.len() {
         let a = points[i];
-        for j in (i + 1)..points.len() {
-            let b = points[j];
-            let area = rectangle_area(&a, &b);
+        for b in points.iter().skip(i + 1) {
+            let area = rectangle_area(&a, b);
             if area > largest_area {
-                largest_rectangle = [a, b];
+                largest_rectangle = [a, *b];
                 largest_area = area;
             }
         }
     }
 
     largest_rectangle
-}
-
-/// Tile colors.
-#[derive(Debug, Copy, Clone, PartialEq)]
-enum Color {
-    Red,
-    Green,
-    Other,
-}
-
-impl Display for Color {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match *self {
-            Self::Red => "#",
-            Self::Green => "X",
-            Self::Other => ".",
-        })
-    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -75,51 +55,44 @@ impl Direction {
             } else {
                 Self::Up
             }
+        } else if start.x < end.x {
+            Self::Right
         } else {
-            if start.x < end.x {
-                Self::Right
-            } else {
-                Self::Left
-            }
+            Self::Left
         }
     }
 
     fn from_line_tuple(line: &(TilePoint, TilePoint)) -> Self {
-        return Self::from_start_to_end(&line.0, &line.1);
+        Self::from_start_to_end(&line.0, &line.1)
     }
 
+    #[allow(unused)]
     fn is_horizontal(&self) -> bool {
-        match self {
-            Self::Left | Self::Right => true,
-            _ => false,
-        }
+        matches!(self, Self::Left | Self::Right)
     }
 
     fn is_vertical(&self) -> bool {
-        match self {
-            Self::Up | Self::Down => true,
-            _ => false,
-        }
+        matches!(self, Self::Up | Self::Down)
     }
 
     fn is_right_of(&self, other: Direction) -> bool {
-        match (*self, other) {
+        matches!(
+            (*self, other),
             (Self::Left, Self::Down)
-            | (Self::Up, Self::Left)
-            | (Self::Right, Self::Up)
-            | (Self::Down, Self::Right) => true,
-            _ => false,
-        }
+                | (Self::Up, Self::Left)
+                | (Self::Right, Self::Up)
+                | (Self::Down, Self::Right)
+        )
     }
 
     fn is_left_of(&self, other: Direction) -> bool {
-        match (*self, other) {
+        matches!(
+            (*self, other),
             (Self::Down, Self::Left)
-            | (Self::Right, Self::Down)
-            | (Self::Up, Self::Right)
-            | (Self::Left, Self::Up) => true,
-            _ => false,
-        }
+                | (Self::Right, Self::Down)
+                | (Self::Up, Self::Right)
+                | (Self::Left, Self::Up)
+        )
     }
 
     fn rotate(&self, rotation: Rotation) -> Self {
@@ -132,28 +105,6 @@ impl Direction {
             (Self::Down, Rotation::CounterClockwise) => Self::Right,
             (Self::Right, Rotation::CounterClockwise) => Self::Up,
             (Self::Up, Rotation::CounterClockwise) => Self::Left,
-        }
-    }
-
-    /// Create a new point by shifting in the given direciton, avoiding going below zero on either axis.
-    fn shift_point(&self, point: &TilePoint) -> Option<TilePoint> {
-        match *self {
-            Self::Left => {
-                if point.x == 0 {
-                    None
-                } else {
-                    Some(point![point.x - 1, point.y])
-                }
-            }
-            Self::Right => Some(point![point.x + 1, point.y]),
-            Self::Up => {
-                if point.y == 0 {
-                    None
-                } else {
-                    Some(point![point.x, point.y - 1])
-                }
-            }
-            Self::Down => Some(point![point.x, point.y + 1]),
         }
     }
 }
@@ -196,13 +147,13 @@ impl SquarePolygon {
             }
         }
 
-        if let Some(first_direction) = line_directions.first() {
-            if let Some(last_direction) = line_directions.last() {
-                if first_direction.is_right_of(*last_direction) {
-                    number_right_turns += 1;
-                } else if first_direction.is_left_of(*last_direction) {
-                    number_left_turns += 1;
-                }
+        if let Some(first_direction) = line_directions.first()
+            && let Some(last_direction) = line_directions.last()
+        {
+            if first_direction.is_right_of(*last_direction) {
+                number_right_turns += 1;
+            } else if first_direction.is_left_of(*last_direction) {
+                number_left_turns += 1;
             }
         }
 
@@ -224,11 +175,6 @@ impl SquarePolygon {
         let (min_x, max_x) = if a.x < b.x { (a.x, b.x) } else { (b.x, a.x) };
         let (min_y, max_y) = if a.y < b.y { (a.y, b.y) } else { (b.y, a.y) };
 
-        // If any line immediately connected to the points is coincident with the rectangle,
-        // it must put the rectangle on its fill side.
-        // If none are coincident, then all must put the rectangle on their fill side.
-        // This can be assessed on a single corner to fully satisfy this condition.
-
         let horizontal_line_to_point = (point![b.x, a.y], point![a.x, a.y]);
         let vertical_line_to_point = (point![a.x, b.y], point![a.x, a.y]);
         let horizontal_line_from_point = (point![a.x, a.y], point![b.x, a.y]);
@@ -238,29 +184,35 @@ impl SquarePolygon {
         let direction_of_rect_x = Direction::from_line_tuple(&horizontal_line_from_point);
         let direction_of_rect_y = Direction::from_line_tuple(&vertical_line_from_point);
 
-        let incoming_idx = self.line_index_by_ends[a];
-        debug_assert_eq!(&self.lines[incoming_idx].1, a);
-        let incoming_direction = self.line_directions[incoming_idx];
-        let incoming_fill_direction = incoming_direction.rotate(self.fill_rotation);
-        let incoming_is_coincident = incoming_direction == direction_to_corner_x
-            || incoming_direction == direction_to_corner_y;
-        let is_fill_side_of_incoming = (incoming_direction.is_horizontal()
-            && direction_of_rect_y == incoming_fill_direction)
-            || (incoming_direction.is_vertical() && direction_of_rect_x == incoming_fill_direction);
+        // If any line immediately connected to the points is coincident with the rectangle,
+        // it must put the rectangle on its fill side.
+        // If none are coincident, then all must put the rectangle on their fill side.
+        // This can be assessed on a single corner to fully satisfy this condition.
+        let rect_is_coincident_and_on_fill_side = |line_idx: usize, a: &TilePoint| {
+            let line = &self.lines[line_idx];
+            let direction = self.line_directions[line_idx];
+            let fill_direction = direction.rotate(self.fill_rotation);
+            let is_coincident = if line.0 == *a {
+                // The line moves away from a.
+                direction == direction_of_rect_x || direction == direction_of_rect_y
+            } else {
+                direction == direction_to_corner_x || direction == direction_to_corner_y
+            };
+            let is_fill_side =
+                direction_of_rect_y == fill_direction || direction_of_rect_x == fill_direction;
+            (is_coincident, is_fill_side)
+        };
 
+        let incoming_idx = self.line_index_by_ends[a];
+        let (incoming_is_coincident, is_fill_side_of_incoming) =
+            rect_is_coincident_and_on_fill_side(incoming_idx, a);
         let outgoing_idx = if (incoming_idx + 1) == self.lines.len() {
             0
         } else {
             incoming_idx + 1
         };
-        debug_assert_eq!(&self.lines[outgoing_idx].0, a);
-        let outgoing_direction = self.line_directions[outgoing_idx];
-        let outgoing_fill_direction = outgoing_direction.rotate(self.fill_rotation);
-        let outgoing_is_coincident =
-            outgoing_direction == direction_of_rect_x || outgoing_direction == direction_of_rect_y;
-        let is_fill_side_of_outgoing = (outgoing_direction.is_horizontal()
-            && direction_of_rect_y == outgoing_fill_direction)
-            || (outgoing_direction.is_vertical() && direction_of_rect_x == outgoing_fill_direction);
+        let (outgoing_is_coincident, is_fill_side_of_outgoing) =
+            rect_is_coincident_and_on_fill_side(outgoing_idx, a);
 
         let has_shape_overlap_beyond_border = (incoming_is_coincident && is_fill_side_of_incoming)
             || (outgoing_is_coincident && is_fill_side_of_outgoing)
@@ -312,18 +264,16 @@ fn largest_green_red_rectangle_with_corners(points: &[TilePoint]) -> [TilePoint;
 
     for i in 0..points.len() {
         let a = points[i];
-        for j in (i + 1)..points.len() {
-            let b = points[j];
-
-            let area = rectangle_area(&a, &b);
-            if area > largest_area && shape.is_rectangle_fully_inside(&a, &b) {
+        for b in points.iter().skip(i + 1) {
+            let area = rectangle_area(&a, b);
+            if area > largest_area && shape.is_rectangle_fully_inside(&a, b) {
                 log::debug!(
                     "Found largest rectangle so far (area: {}) at ({}, {})",
                     area,
                     &a,
-                    &b
+                    b
                 );
-                largest_rectangle = [a, b];
+                largest_rectangle = [a, *b];
                 largest_area = area;
             }
         }
@@ -352,7 +302,7 @@ fn parse_point(input: &str) -> Result<TilePoint, Error> {
 }
 
 fn parse_points(input: &str) -> Result<Vec<TilePoint>, Error> {
-    input.lines().map(|line| parse_point(line)).collect()
+    input.lines().map(parse_point).collect()
 }
 
 pub fn part1(input: &str) -> Result<i64, Error> {
