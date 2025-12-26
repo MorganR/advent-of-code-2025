@@ -114,6 +114,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Largest area: {}", largest_area);
             Ok(())
         }
+        (10, 1) => {
+            let num_presses = days::day10::part1(&input)?;
+            println!("Num button presses: {}", num_presses);
+            Ok(())
+        }
         _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }
