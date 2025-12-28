@@ -8,5 +8,6 @@ anyhow = "1.0.100"
 clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11.8"
 log = "0.4.29"
+microlp = "0.2.11"
 nalgebra = "0.34.1"
 thiserror = "2.0.17"

@@ -1,5 +1,4 @@
 use std::{
-    cmp::Ordering,
     collections::{HashSet, VecDeque},
     fmt::{Display, Write},
     str::FromStr,
@@ -7,6 +6,7 @@ use std::{
 
 use anyhow::Error as AnyError;
 use anyhow::Result as AnyResult;
+use microlp::Problem;
 
 use crate::utils::input::Error;
 
@@ -147,10 +147,6 @@ impl Button {
     fn get_indices(&self) -> &Vec<usize> {
         &self.indices
     }
-
-    fn width(&self) -> usize {
-        self.indices.len()
-    }
 }
 
 impl FromStr for Button {
@@ -237,12 +233,6 @@ impl Joltage {
         self.values.len()
     }
 
-    fn push(&mut self, button: &Button, n: i64) {
-        for &idx in button.get_indices() {
-            self.values[idx] += n;
-        }
-    }
-
     fn max_num_pushes(&self, button: &Button, target: &Joltage) -> i64 {
         let mut max_pushes = i64::MAX;
         for &idx in button.get_indices() {
@@ -326,142 +316,6 @@ impl ButtonPresses {
     }
 }
 
-#[derive(Clone)]
-struct JoltageWorkItem {
-    /// The current joltage.
-    joltage: Joltage,
-    /// The minimum next button index to check.
-    next_idx: usize,
-    /// Path of button presses so far.
-    path_so_far: ButtonPresses,
-}
-
-impl JoltageWorkItem {
-    fn min_possible_presses(&self) -> i64 {
-        let remaining_presses = *self.joltage.values.iter().max().unwrap();
-        let presses_so_far = self.path_so_far.total_presses();
-        remaining_presses + presses_so_far
-    }
-}
-
-struct JoltagePathFinder<'m> {
-    target: &'m Joltage,
-    buttons: Vec<Button>,
-    joltage: Joltage,
-    orig_button_idx: Vec<usize>,
-}
-
-impl<'m> JoltagePathFinder<'m> {
-    fn new(target: &'m Joltage, buttons: &'m [Button]) -> Self {
-        let joltage = Joltage::new(target.len());
-
-        let mut button_idx_by_joltage_idx: Vec<_> = (0..joltage.values.len())
-            .map(|_| Vec::<usize>::new())
-            .collect();
-        for (idx, button) in buttons.iter().enumerate() {
-            for &j_idx in button.get_indices() {
-                let button_idxs = button_idx_by_joltage_idx.get_mut(j_idx).unwrap();
-                button_idxs.push(idx);
-            }
-        }
-
-        let mut sorted_buttons: Vec<Button> = buttons.iter().map(|b| b.clone()).collect();
-        sorted_buttons.sort_unstable_by(|b1, b2| {
-            // Sort in descending width order.
-            let width_comp = b2.width().cmp(&b1.width());
-            if width_comp != Ordering::Equal {
-                return width_comp;
-            }
-
-            // Secondary sort in ascending max push order.
-            let b1_max_push = joltage.max_num_pushes(b1, target);
-            let b2_max_push = joltage.max_num_pushes(b2, target);
-            b1_max_push.cmp(&b2_max_push)
-        });
-        let orig_button_idx = sorted_buttons
-            .iter()
-            .map(|b| {
-                buttons
-                    .iter()
-                    .enumerate()
-                    .find_map(|(i, orig_b)| if orig_b == b { Some(i) } else { None })
-                    .unwrap()
-            })
-            .collect();
-
-        Self {
-            target,
-            buttons: sorted_buttons,
-            joltage,
-            orig_button_idx,
-        }
-    }
-
-    fn shortest_path_to_target(self) -> Option<ButtonPresses> {
-        let mut work_queue: VecDeque<JoltageWorkItem> = VecDeque::new();
-        for idx in 0..self.buttons.len() {
-            work_queue.push_back(JoltageWorkItem {
-                next_idx: idx,
-                joltage: self.joltage.clone(),
-                path_so_far: ButtonPresses::new(self.buttons.len()),
-            });
-        }
-
-        let mut best_so_far: Option<ButtonPresses> = None;
-        while let Some(item) = work_queue.pop_front() {
-            if item.next_idx >= self.buttons.len() {
-                continue;
-            }
-
-            if let Some(best_path) = &best_so_far
-                && best_path.total_presses() <= item.min_possible_presses()
-            {
-                continue;
-            }
-
-            for b_idx in item.next_idx..self.buttons.len() {
-                let mut next_item = item.clone();
-                next_item.next_idx = b_idx + 1;
-                let button = &self.buttons[b_idx];
-                let num_pushes = item.joltage.max_num_pushes(button, self.target);
-                if num_pushes == 0 {
-                    work_queue.push_back(next_item);
-                    continue;
-                }
-
-                next_item.joltage.push(button, num_pushes);
-                next_item.path_so_far.press(b_idx, num_pushes);
-                if next_item.joltage == *self.target {
-                    best_so_far = Some(next_item.path_so_far);
-                    break;
-                } else {
-                    work_queue.push_back(next_item);
-                }
-            }
-        }
-
-        best_so_far.map(|p| self.map_to_original_idx(p))
-    }
-
-    /// Map [ButtonPresses] back to the original button index.
-    fn map_to_original_idx(&self, presses: ButtonPresses) -> ButtonPresses {
-        if presses.total_presses() == 0 {
-            return presses;
-        }
-
-        let mut idx_presses: Vec<_> = presses.presses_by_idx.iter().enumerate().collect();
-        idx_presses.sort_unstable_by(|(i1, _), (i2, _)| {
-            let orig_1 = self.orig_button_idx[*i1];
-            let orig_2 = self.orig_button_idx[*i2];
-            orig_1.cmp(&orig_2)
-        });
-
-        ButtonPresses {
-            presses_by_idx: idx_presses.iter().map(|(_, p)| **p).collect(),
-        }
-    }
-}
-
 #[derive(Debug, PartialEq)]
 struct Machine {
     target_lights: Lights,
@@ -511,10 +365,45 @@ impl Machine {
         None
     }
 
-    pub fn shortest_path_to_target_joltage(&self) -> Option<ButtonPresses> {
-        let path_finder = JoltagePathFinder::new(&self.target_joltage, &self.buttons);
+    pub fn shortest_path_to_target_joltage(&self) -> AnyResult<ButtonPresses> {
+        let joltage = Joltage::new(self.target_joltage.len());
+        let mut button_idxs_by_joltage_idx: Vec<_> = (0..joltage.values.len())
+            .map(|_| Vec::<usize>::new())
+            .collect();
+        for (idx, button) in self.buttons.iter().enumerate() {
+            for &j_idx in button.get_indices() {
+                let button_idxs = button_idxs_by_joltage_idx.get_mut(j_idx).unwrap();
+                button_idxs.push(idx);
+            }
+        }
 
-        path_finder.shortest_path_to_target()
+        let mut problem = Problem::new(microlp::OptimizationDirection::Minimize);
+        let mut variables = Vec::new();
+        for button in &self.buttons {
+            variables.push(problem.add_integer_var(
+                1.0,
+                (
+                    0,
+                    joltage.max_num_pushes(button, &self.target_joltage) as i32,
+                ),
+            ));
+        }
+        for (idx, &value) in self.target_joltage.values.iter().enumerate() {
+            // value = a + b ... etc for each button that contributes to that value.
+            let relevant_buttons = &button_idxs_by_joltage_idx[idx];
+            let left_side: Vec<_> = relevant_buttons
+                .iter()
+                .map(|&b_idx| (variables[b_idx], 1.0))
+                .collect();
+            problem.add_constraint(&left_side, microlp::ComparisonOp::Eq, value as f64);
+        }
+
+        let solution = problem.solve()?;
+        let mut presses = ButtonPresses::new(self.buttons.len());
+        for (idx, var) in variables.iter().enumerate() {
+            presses.press(idx, solution.var_value_rounded(*var) as i64)
+        }
+        Ok(presses)
     }
 }
 
@@ -592,7 +481,7 @@ pub fn part2(input: &str) -> AnyResult<i64> {
     let mut total_button_presses = 0;
     for line in input.lines() {
         let machine: Machine = line.parse()?;
-        if let Some(path) = machine.shortest_path_to_target_joltage() {
+        if let Ok(path) = machine.shortest_path_to_target_joltage() {
             log::debug!("Found shortest path: {:?}", path);
             total_button_presses += path.total_presses();
         } else {
@@ -770,7 +659,7 @@ mod tests {
 
         let maybe_path = machine.shortest_path_to_target_joltage();
 
-        assert!(maybe_path.is_some());
+        assert!(maybe_path.is_ok());
         let path = maybe_path.unwrap();
         assert_eq!(path.total_presses(), 10, "{:?}", path);
     }
@@ -779,12 +668,13 @@ mod tests {
     fn test_machine_shortest_joltage_tough() {
         //                                   0     1           2         3   4       5                 6         7     8           9                 0  1  2  3  4  5  6  7  8  9
         let machine: Machine = "[.#......#.] (2,9) (3,5,6,7,8) (0,7,8,9) (4) (0,2,3) (2,3,4,5,6,7,8,9) (1,2,3,7) (1,8) (0,2,5,6,9) (0,1,2,3,5,6,7) {59,48,81,71,11,42,42,70,42,42}"
-            .parse()  
+            .parse()
             .unwrap();
 
         let maybe_path = machine.shortest_path_to_target_joltage();
 
-        assert!(maybe_path.is_some());
+        assert!(maybe_path.is_ok());
+        assert_eq!(maybe_path.unwrap().total_presses(), 112);
     }
 
     #[test]
