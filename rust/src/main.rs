@@ -124,6 +124,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Num button presses: {}", num_presses);
             Ok(())
         }
+        (11, 1) => {
+            let result = days::day11::part1(&input)?;
+            println!("Number of paths: {}", result);
+            Ok(())
+        }
         _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }
