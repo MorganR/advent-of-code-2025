@@ -1,7 +1,39 @@
 use anyhow::Result as AnyResult;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::os::linux::net;
+use std::collections::HashMap;
 use std::str::FromStr;
+
+#[derive(PartialEq, Eq, Clone)]
+struct RequiredNodeData<'s> {
+    has_seen: HashMap<&'s String, bool>,
+    path_count: i64,
+}
+
+impl<'s> RequiredNodeData<'s> {
+    fn new<'a: 's>(required: &[&'a String]) -> Self {
+        Self {
+            has_seen: required.iter().map(|r| (*r, false)).collect(),
+            path_count: 0,
+        }
+    }
+
+    fn see(&mut self, node: &String) {
+        if let Some(has_seen) = self.has_seen.get_mut(node) {
+            *has_seen = true;
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.path_count += other.path_count;
+    }
+
+    fn can_merge(&self, other: &Self) -> bool {
+        self.has_seen == other.has_seen
+    }
+
+    fn all_seen(&self) -> bool {
+        self.has_seen.values().all(|seen| *seen)
+    }
+}
 
 #[derive(Debug, PartialEq)]
 struct Network {
@@ -9,13 +41,98 @@ struct Network {
 }
 
 impl Network {
-    fn count_paths(&self, src: &String, dest: &String) -> i64 {
-        if let Some(next) = self.devices.get(src) {
-            if next.contains(dest) {
-                1
-            } else {
-                next.iter().map(|n| self.count_paths(n, dest)).sum()
+    fn count_paths_impl<'s: 'arg, 'arg: 'tmp, 'tmp>(
+        &'s self,
+        src: &'arg String,
+        dest: &'arg String,
+        known_paths_by_source: &mut HashMap<&'tmp String, i64>,
+    ) -> i64 {
+        if let Some(count) = known_paths_by_source.get(src) {
+            return *count;
+        }
+
+        let Some(next) = self.devices.get(src) else {
+            return 0;
+        };
+
+        let num_paths = if next.contains(dest) {
+            1
+        } else {
+            next.iter()
+                .map(|n| self.count_paths_impl(n, dest, known_paths_by_source))
+                .sum()
+        };
+        known_paths_by_source.insert(src, num_paths);
+        num_paths
+    }
+
+    fn count_paths_with_required_nodes_impl<'s: 'arg, 'arg: 'tmp + 'node_data, 'tmp, 'node_data>(
+        &'s self,
+        src: &'arg String,
+        dest: &'arg String,
+        required: &'arg [&'arg String],
+        known_paths_by_source: &mut HashMap<&'tmp String, Vec<RequiredNodeData<'node_data>>>,
+    ) -> Vec<RequiredNodeData<'node_data>> {
+        if let Some(data) = known_paths_by_source.get(src) {
+            return data.clone();
+        }
+
+        let Some(next) = self.devices.get(src) else {
+            // No path, return empty dict.
+            return vec![];
+        };
+
+        let results = if next.contains(dest) {
+            let mut data = RequiredNodeData::new(required);
+            data.see(dest);
+            data.see(src);
+            data.path_count = 1;
+            vec![data]
+        } else {
+            let mut results: Vec<RequiredNodeData<'_>> = Vec::new();
+            for node in next {
+                let node_results = self.count_paths_with_required_nodes_impl(
+                    node,
+                    dest,
+                    required,
+                    known_paths_by_source,
+                );
+                for mut data in node_results {
+                    data.see(src);
+                    if let Some(same_requirements) = results.iter_mut().find(|d| d.can_merge(&data))
+                    {
+                        same_requirements.merge(data);
+                    } else {
+                        results.push(data);
+                    }
+                }
             }
+            results
+        };
+        known_paths_by_source.insert(src, results.clone());
+        results
+    }
+
+    fn count_paths(&self, src: &String, dest: &String) -> i64 {
+        let mut known_paths_by_source = HashMap::new();
+        self.count_paths_impl(src, dest, &mut known_paths_by_source)
+    }
+
+    fn count_paths_with_required_nodes(
+        &self,
+        src: &String,
+        dest: &String,
+        required: &[&String],
+    ) -> i64 {
+        let mut known_paths_by_source = HashMap::new();
+        let results = self.count_paths_with_required_nodes_impl(
+            src,
+            dest,
+            required,
+            &mut known_paths_by_source,
+        );
+        if let Some(result) = results.iter().find(|data| data.all_seen()) {
+            result.path_count
         } else {
             0
         }
@@ -54,12 +171,19 @@ impl FromStr for Network {
 pub fn part1(input: &str) -> AnyResult<i64> {
     let network: Network = input.parse()?;
 
-    Ok(network.count_paths(&"you".to_string(), &"out".to_string()))
+    let src: String = "you".to_string();
+    let dest: String = "out".to_string();
+    Ok(network.count_paths(&src, &dest))
 }
 
 pub fn part2(input: &str) -> AnyResult<i64> {
-    // TODO: Implement part 2
-    Ok(0)
+    let network: Network = input.parse()?;
+
+    let src: String = "svr".to_string();
+    let dest: String = "out".to_string();
+    let required = ["fft".to_string(), "dac".to_string()];
+    let required_refs: Vec<&String> = required.iter().collect();
+    Ok(network.count_paths_with_required_nodes(&src, &dest, &required_refs))
 }
 
 #[cfg(test)]
@@ -87,8 +211,24 @@ iii: out",
 
     #[test]
     fn test_part2() {
-        let result = part2("");
+        let result = part2(
+            "svr: aaa bbb
+aaa: fft
+fft: ccc
+bbb: tty
+tty: ccc
+ccc: ddd eee
+ddd: hub
+hub: fff
+eee: dac
+dac: fff
+fff: ggg hhh
+ggg: out
+hhh: out",
+        );
+
         assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
     }
 
     #[test]
