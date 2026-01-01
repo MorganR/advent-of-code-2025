@@ -134,6 +134,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             println!("Number of paths: {}", result);
             Ok(())
         }
+        (12, 1) => {
+            let result = days::day12::part1(&input)?;
+            println!("Number of packable trees: {}", result);
+            Ok(())
+        }
         _ => Err(format!("Day {} part {} not implemented", args.day, args.part).into()),
     }
 }
