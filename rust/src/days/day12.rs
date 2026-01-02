@@ -38,6 +38,15 @@ impl Display for Pixel {
     }
 }
 
+/// Clockwise rotation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rotation {
+    Rot0,
+    Rot90,
+    Rot180,
+    Rot270,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Flip {
     None,
@@ -279,94 +288,6 @@ impl FromStr for Rectangle {
 
         Ok(Rectangle { width, height })
     }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-struct Tree {
-    space: Rectangle,
-    /// The required number of gifts of each shape, identified by index.
-    num_gifts: Vec<usize>,
-}
-
-impl Tree {
-    fn try_fill(
-        &self,
-        placements: &mut PlacementSpace,
-        gifts_to_place: &mut [usize],
-        gifts: &[Gift],
-    ) -> bool {
-        if gifts_to_place.iter().sum::<usize>() == 0 {
-            log::debug!("Found functional placement for tree: {:?}", placements);
-            return true;
-        }
-
-        let possible_placements = placements.next_possible_placements(gifts_to_place, gifts);
-        for placement in possible_placements {
-            gifts_to_place[placement.gift_idx] -= 1;
-            placements.place(&placement.gift, &placement.blocked_points);
-            if self.try_fill(placements, gifts_to_place, gifts) {
-                return true;
-            }
-            placements.unplace(&placement.gift, &placement.blocked_points);
-            gifts_to_place[placement.gift_idx] += 1;
-        }
-        false
-    }
-
-    fn can_fit(&self, gifts: &[Gift]) -> bool {
-        let minimum_area: usize = gifts
-            .iter()
-            .enumerate()
-            .map(|(i, g)| self.num_gifts[i] * g.area)
-            .sum();
-        let area = self.space.area();
-        if minimum_area > area {
-            return false;
-        }
-
-        let mut gifts_to_place = self.num_gifts.clone();
-        let mut placements = PlacementSpace::new(self.space.width, self.space.height);
-        self.try_fill(&mut placements, &mut gifts_to_place, gifts)
-    }
-}
-
-impl FromStr for Tree {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return Err(Error::ParseError(format!(
-                "Invalid tree format '{}': expected 'widthxheight: gift1 gift2 ...'",
-                s
-            )));
-        }
-
-        let space = parts[0].trim().parse::<Rectangle>()?;
-
-        let gifts = parts[1]
-            .split_whitespace()
-            .map(|num_str| {
-                num_str.parse::<usize>().map_err(|_| {
-                    Error::ParseError(format!("Invalid gift count '{}' in tree '{}'", num_str, s))
-                })
-            })
-            .collect::<Result<Vec<usize>, Error>>()?;
-
-        Ok(Tree {
-            space,
-            num_gifts: gifts,
-        })
-    }
-}
-
-/// Clockwise rotation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Rotation {
-    Rot0,
-    Rot90,
-    Rot180,
-    Rot270,
 }
 
 struct PlacedGift<'a> {
@@ -764,6 +685,81 @@ fn iterate_contiguous<StopFn: Fn(Point2<i32>) -> bool>(
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+struct Tree {
+    space: Rectangle,
+    /// The required number of gifts of each shape, identified by index.
+    num_gifts: Vec<usize>,
+}
+
+/// Tries to fill the placement space with the number of each gift from gifts_to_place.
+fn try_fill(placements: &mut PlacementSpace, gifts_to_place: &mut [usize], gifts: &[Gift]) -> bool {
+    if gifts_to_place.iter().sum::<usize>() == 0 {
+        log::debug!("Found functional placement for tree: {:?}", placements);
+        return true;
+    }
+
+    let possible_placements = placements.next_possible_placements(gifts_to_place, gifts);
+    for placement in possible_placements {
+        gifts_to_place[placement.gift_idx] -= 1;
+        placements.place(&placement.gift, &placement.blocked_points);
+        if try_fill(placements, gifts_to_place, gifts) {
+            return true;
+        }
+        placements.unplace(&placement.gift, &placement.blocked_points);
+        gifts_to_place[placement.gift_idx] += 1;
+    }
+    false
+}
+
+impl Tree {
+    fn can_fit(&self, gifts: &[Gift]) -> bool {
+        let minimum_area: usize = gifts
+            .iter()
+            .enumerate()
+            .map(|(i, g)| self.num_gifts[i] * g.area)
+            .sum();
+        let area = self.space.area();
+        if minimum_area > area {
+            return false;
+        }
+
+        let mut gifts_to_place = self.num_gifts.clone();
+        let mut placements = PlacementSpace::new(self.space.width, self.space.height);
+        try_fill(&mut placements, &mut gifts_to_place, gifts)
+    }
+}
+
+impl FromStr for Tree {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return Err(Error::ParseError(format!(
+                "Invalid tree format '{}': expected 'widthxheight: gift1 gift2 ...'",
+                s
+            )));
+        }
+
+        let space = parts[0].trim().parse::<Rectangle>()?;
+
+        let gifts = parts[1]
+            .split_whitespace()
+            .map(|num_str| {
+                num_str.parse::<usize>().map_err(|_| {
+                    Error::ParseError(format!("Invalid gift count '{}' in tree '{}'", num_str, s))
+                })
+            })
+            .collect::<Result<Vec<usize>, Error>>()?;
+
+        Ok(Tree {
+            space,
+            num_gifts: gifts,
+        })
+    }
+}
+
 fn parse_gifts_and_trees(input: &str) -> Result<(Vec<Gift>, Vec<Tree>), Error> {
     let mut gifts = Vec::new();
     let mut trees = Vec::new();
@@ -1063,7 +1059,9 @@ mod tests {
     fn test_tree_can_fit() {
         let gift: Gift = "###
 #.#
-#.#".parse().unwrap();
+#.#"
+        .parse()
+        .unwrap();
         let tree: Tree = "4x4: 2".parse().unwrap();
 
         assert!(tree.can_fit(&[gift]));
@@ -1073,39 +1071,41 @@ mod tests {
     fn test_placements_find_blocked_points() {
         let gift: Gift = "###
 #.#
-#.#".parse().unwrap();
-        let mut placements = PlacementSpace::new(4,4);
+#.#"
+        .parse()
+        .unwrap();
+        let mut placements = PlacementSpace::new(4, 4);
 
-        let normal_view = gift.views.iter().find(|v| v.rotation == Rotation::Rot0 && v.flip == Flip::None).unwrap();
+        let normal_view = gift
+            .views
+            .iter()
+            .find(|v| v.rotation == Rotation::Rot0 && v.flip == Flip::None)
+            .unwrap();
         let upside_down_view = normal_view.create_flipped(Flip::Vertical);
 
-        let blocked_normal = placements.find_blocked_points(
-            &PlacedGift::new(point![0, 0], normal_view), &[&gift]);
-        assert!(blocked_normal.is_empty()); 
+        let blocked_normal =
+            placements.find_blocked_points(&PlacedGift::new(point![0, 0], normal_view), &[&gift]);
+        assert!(blocked_normal.is_empty());
 
-        let blocked_upside_down = placements.find_blocked_points(
-            &PlacedGift::new(point![0, 0], &upside_down_view), &[&gift]);
-        assert_eq!(blocked_upside_down, [
-            point![1, 0],
-            point![1, 1],
-        ].into_iter().collect());
+        let blocked_upside_down = placements
+            .find_blocked_points(&PlacedGift::new(point![0, 0], &upside_down_view), &[&gift]);
+        assert_eq!(
+            blocked_upside_down,
+            [point![1, 0], point![1, 1],].into_iter().collect()
+        );
 
         // Now place the normal orientation, and see if the remaining corners are blocked
         // by placing the upside down view intersecting it.
         placements.place(&PlacedGift::new(point![0, 0], normal_view), &[]);
-        let second_placement = PlacedGift::new(
-                point![1, 1], &upside_down_view
-            );
-        let blocked_upside_down = placements.find_blocked_points(
-            &second_placement, &[&gift]);
-        assert_eq!(blocked_upside_down, [
-            point![0, 3],
-            point![3, 0],
-        ].into_iter().collect());
+        let second_placement = PlacedGift::new(point![1, 1], &upside_down_view);
+        let blocked_upside_down = placements.find_blocked_points(&second_placement, &[&gift]);
+        assert_eq!(
+            blocked_upside_down,
+            [point![0, 3], point![3, 0],].into_iter().collect()
+        );
 
         // Then see if there are no more gifts to place that it's fine.
-        let blocked_upside_down = placements.find_blocked_points(
-            &second_placement, &[]);
+        let blocked_upside_down = placements.find_blocked_points(&second_placement, &[]);
         assert!(blocked_upside_down.is_empty());
     }
 
