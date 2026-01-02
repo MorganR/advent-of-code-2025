@@ -1,8 +1,6 @@
-use core::num;
 use std::{
     collections::{HashSet, VecDeque},
-    path::Iter,
-    ptr::null,
+    fmt::{Debug, Display},
     str::FromStr,
 };
 
@@ -16,6 +14,7 @@ use crate::utils::input::Error;
 enum Pixel {
     Gift,
     Empty,
+    Dead,
 }
 
 impl Pixel {
@@ -23,8 +22,19 @@ impl Pixel {
         match c {
             '#' => Ok(Pixel::Gift),
             '.' => Ok(Pixel::Empty),
+            '\\' => Ok(Pixel::Dead),
             _ => Err(Error::ParseError(format!("Can't parse {} as a pixel", c))),
         }
+    }
+}
+
+impl Display for Pixel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Pixel::Gift => "#",
+            Pixel::Empty => ".",
+            Pixel::Dead => "\\",
+        })
     }
 }
 
@@ -191,12 +201,12 @@ impl FromStr for Gift {
 
             let row = trimmed_line
                 .chars()
-                .map(|p| Pixel::from_char(p))
+                .map(Pixel::from_char)
                 .collect::<Result<Vec<_>, Error>>()?;
             shape.push(row);
         }
 
-        let row_length = shape.iter().next().map(|r| r.len()).unwrap_or(0);
+        let row_length = shape.first().map(|r| r.len()).unwrap_or(0);
         if shape.iter().any(|r| r.len() != row_length) {
             return Err(Error::ParseError(format!(
                 "could not parse '{}' as gift; all gift rows must have the same length",
@@ -221,7 +231,7 @@ impl FromStr for Gift {
         }
         for i in 0..views.len() {
             for flip in [Flip::Vertical, Flip::Horizontal] {
-                let flipped = (&views[i]).create_flipped(flip);
+                let flipped = views[i].create_flipped(flip);
                 if !views.iter().any(|v| v.looks_same(&flipped)) {
                     views.push(flipped);
                 }
@@ -279,6 +289,30 @@ struct Tree {
 }
 
 impl Tree {
+    fn try_fill(
+        &self,
+        placements: &mut PlacementSpace,
+        gifts_to_place: &mut [usize],
+        gifts: &[Gift],
+    ) -> bool {
+        if gifts_to_place.iter().sum::<usize>() == 0 {
+            log::debug!("Found functional placement for tree: {:?}", placements);
+            return true;
+        }
+
+        let possible_placements = placements.next_possible_placements(gifts_to_place, gifts);
+        for placement in possible_placements {
+            gifts_to_place[placement.gift_idx] -= 1;
+            placements.place(&placement.gift, &placement.blocked_points);
+            if self.try_fill(placements, gifts_to_place, gifts) {
+                return true;
+            }
+            placements.unplace(&placement.gift, &placement.blocked_points);
+            gifts_to_place[placement.gift_idx] += 1;
+        }
+        false
+    }
+
     fn can_fit(&self, gifts: &[Gift]) -> bool {
         let minimum_area: usize = gifts
             .iter()
@@ -290,20 +324,9 @@ impl Tree {
             return false;
         }
 
-        let mut placements = PlacementSpace::new(self.space.width, self.space.height);
         let mut gifts_to_place = self.num_gifts.clone();
-
-        while gifts_to_place.iter().sum::<usize>() > 0 {
-            if let Some((gift_idx, _placed_gift)) =
-                placements.place_next_gift(&gifts_to_place, gifts)
-            {
-                gifts_to_place[gift_idx] -= 1;
-            } else {
-                return false;
-            }
-        }
-
-        true
+        let mut placements = PlacementSpace::new(self.space.width, self.space.height);
+        self.try_fill(&mut placements, &mut gifts_to_place, gifts)
     }
 }
 
@@ -357,7 +380,7 @@ impl<'a> PlacedGift<'a> {
     }
 
     fn view(&self) -> &ShapeView {
-        &self.view
+        self.view
     }
 
     fn occupied_world_pixels(&self) -> impl Iterator<Item = Point2<i32>> + '_ {
@@ -395,11 +418,30 @@ impl<'a> PlacedGift<'a> {
     }
 }
 
+struct PossiblePlacement<'a> {
+    gift_idx: usize,
+    gift: PlacedGift<'a>,
+    blocked_points: HashSet<Point2<i32>>,
+}
+
+impl<'a> PossiblePlacement<'a> {
+    fn new(gift_idx: usize, gift: PlacedGift<'a>, blocked_points: HashSet<Point2<i32>>) -> Self {
+        Self {
+            gift_idx,
+            gift,
+            blocked_points,
+        }
+    }
+}
+
 struct PlacementSpace {
     width: usize,
     height: usize,
     /// Flat grid tracking which cells are occupied.
-    occupied: Vec<bool>,
+    space: Vec<Pixel>,
+    num_empty_pixels: usize,
+    last_fully_empty_x: usize,
+    last_fully_empty_y: usize,
 }
 
 impl PlacementSpace {
@@ -407,10 +449,14 @@ impl PlacementSpace {
         Self {
             width,
             height,
-            occupied: vec![false; width * height],
+            space: vec![Pixel::Empty; width * height],
+            num_empty_pixels: width * height,
+            last_fully_empty_x: 0,
+            last_fully_empty_y: 0,
         }
     }
 
+    /// If this point is occupied by a gift.
     fn is_occupied(&self, point: Point2<i32>) -> bool {
         if point.x < 0 || point.y < 0 {
             return true; // Out of bounds = occupied
@@ -423,7 +469,44 @@ impl PlacementSpace {
             return true;
         }
 
-        self.occupied[y * self.width + x]
+        self.space[y * self.width + x] == Pixel::Gift
+    }
+
+    /// If this point is a candidate to place a gift.
+    fn is_available(&self, point: Point2<i32>) -> bool {
+        if point.x < 0 || point.y < 0 {
+            return false;
+        }
+
+        let x = point.x as usize;
+        let y = point.y as usize;
+
+        if x >= self.width || y >= self.height {
+            return false;
+        }
+
+        self.space[y * self.width + x] == Pixel::Empty
+    }
+
+    fn set_pixel(&mut self, point: Point2<i32>, value: Pixel) {
+        let x = point.x as usize;
+        let y = point.y as usize;
+        if let Some(pixel) = self.space.get_mut(y * self.width + x) {
+            if *pixel == Pixel::Empty && value != Pixel::Empty {
+                self.num_empty_pixels -= 1;
+                if y >= self.last_fully_empty_y {
+                    self.last_fully_empty_y = y + 1;
+                }
+                if x >= self.last_fully_empty_x {
+                    self.last_fully_empty_x = x + 1;
+                }
+            } else if *pixel != Pixel::Empty && value == Pixel::Empty {
+                self.num_empty_pixels += 1;
+                // Note: this would be expensive to reset the last_fully_empty_* fields here, so
+                // we do it elsewhere.
+            }
+            *pixel = value;
+        }
     }
 
     fn can_place(&self, gift: &PlacedGift) -> bool {
@@ -440,34 +523,73 @@ impl PlacementSpace {
         gift.occupied_world_pixels().all(|p| !self.is_occupied(p))
     }
 
-    fn place(&mut self, gift: &PlacedGift) {
+    fn place<'i, PIter>(&mut self, gift: &PlacedGift, blocked_points: PIter)
+    where
+        PIter: IntoIterator<Item = &'i Point2<i32>>,
+    {
         for point in gift.occupied_world_pixels() {
-            let x = point.x as usize;
-            let y = point.y as usize;
-            self.occupied[y * self.width + x] = true;
+            self.set_pixel(point, Pixel::Gift);
+        }
+        for point in blocked_points {
+            self.set_pixel(*point, Pixel::Dead);
         }
     }
 
-    fn place_next_gift<'g>(
+    fn unplace<'i, PIter>(&mut self, gift: &PlacedGift, blocked_points: PIter)
+    where
+        PIter: IntoIterator<Item = &'i Point2<i32>>,
+    {
+        for point in gift.occupied_world_pixels() {
+            self.set_pixel(point, Pixel::Empty);
+        }
+        for point in blocked_points {
+            self.set_pixel(*point, Pixel::Empty);
+        }
+
+        self.last_fully_empty_x = {
+            let mut tmp_last_x = self.width;
+            for x in (0..self.width as i32).rev() {
+                let is_all_empty = (0..self.height as i32).all(|y| self.is_available(point![x, y]));
+                if !is_all_empty {
+                    break;
+                }
+                tmp_last_x = x as usize;
+            }
+            tmp_last_x
+        };
+        self.last_fully_empty_y = {
+            let mut tmp_last_y = self.width;
+            for y in (0..self.height as i32).rev() {
+                let is_all_empty = (0..self.width as i32).all(|x| self.is_available(point![x, y]));
+                if !is_all_empty {
+                    break;
+                }
+                tmp_last_y = y as usize;
+            }
+            tmp_last_y
+        };
+    }
+
+    fn next_possible_placements<'g>(
         &mut self,
         gifts_to_place: &[usize],
         gifts: &'g [Gift],
-    ) -> Option<(usize, PlacedGift<'g>)> {
-        let mut fewest_blocked_points = usize::MAX;
-        let mut best_gift = None;
+    ) -> Vec<PossiblePlacement<'g>> {
+        let min_space_needed: usize = gifts_to_place
+            .iter()
+            .enumerate()
+            .map(|(idx, num)| gifts[idx].area * num)
+            .sum();
+        if min_space_needed > self.num_empty_pixels {
+            return Vec::new();
+        }
 
-        for x in 0..self.height {
-            if fewest_blocked_points == 0 {
-                break;
-            }
-            let mut is_all_unoccupied = true;
-            for y in 0..self.width {
-                if fewest_blocked_points == 0 {
-                    break;
-                }
+        let mut possible_placements = Vec::new();
+
+        for x in 0..=self.last_fully_empty_x.min(self.width - 1) {
+            for y in 0..=self.last_fully_empty_y.min(self.height - 1) {
                 let at = point!(x as i32, y as i32);
-                if self.is_occupied(at) {
-                    is_all_unoccupied = false;
+                if !self.is_available(at) {
                     continue;
                 }
                 for (gift_idx, _) in gifts_to_place
@@ -489,27 +611,22 @@ impl PlacementSpace {
                         .collect();
                     let valid_placements = self.find_valid_placements_at(at, gift);
                     for placed_gift in valid_placements {
-                        let num_blocked_points =
-                            self.count_blocked_points(&placed_gift, &other_available_gifts);
-                        if num_blocked_points < fewest_blocked_points {
-                            fewest_blocked_points = num_blocked_points;
-                            best_gift = Some((gift_idx, placed_gift));
-                        }
+                        let blocked_points =
+                            self.find_blocked_points(&placed_gift, &other_available_gifts);
+                        possible_placements.push(PossiblePlacement::new(
+                            gift_idx,
+                            placed_gift,
+                            blocked_points,
+                        ));
                     }
                 }
             }
-            // Once we have tackled a fully unoccupied row, we can exit.
-            if is_all_unoccupied {
-                break;
-            }
         }
 
-        // Place the best gift if there is one.
-        if let Some((_, gift)) = &best_gift {
-            self.place(gift);
-        }
+        // Sort by fewest blocked points to get the most likely successful order.
+        possible_placements.sort_unstable_by_key(|pp| pp.blocked_points.len());
 
-        best_gift
+        possible_placements
     }
 
     /// Finds a valid placement, if possible, for the given gift such that it has a non-empty pixel
@@ -520,7 +637,7 @@ impl PlacementSpace {
         gift: &'g Gift,
     ) -> impl Iterator<Item = PlacedGift<'g>> {
         let mut placed_gifts = Vec::with_capacity(4);
-        for (i, view) in gift.views.iter().enumerate() {
+        for view in gift.views.iter() {
             let top_left = view.occupied_pixels().next().unwrap();
             let required_offset = at - point![top_left.0 as i32, top_left.1 as i32];
             let placed_gift = PlacedGift::new(Point2::from(required_offset), view);
@@ -532,8 +649,12 @@ impl PlacementSpace {
     }
 
     /// Counts the number of points that become inaccessible after placing this point.
-    fn count_blocked_points(&self, gift: &PlacedGift, available_gifts: &[&Gift]) -> usize {
-        let mut count_blocked = 0;
+    fn find_blocked_points(
+        &self,
+        gift: &PlacedGift,
+        available_gifts: &[&Gift],
+    ) -> HashSet<Point2<i32>> {
+        let mut blocked = HashSet::new();
 
         let min_gift_size = available_gifts.iter().map(|g| g.area).min().unwrap_or(0);
 
@@ -554,20 +675,37 @@ impl PlacementSpace {
                     })
                     .take(min_gift_size) // Take only up-to the min gift-size to early exit.
                     .collect();
-                    let old_checked_points_size = checked_points.len();
-                    let gap_size = gap_points.len();
+                    if gap_points.len() < min_gift_size {
+                        blocked.extend(gap_points.iter());
+                    }
                     checked_points.extend(gap_points);
-                    if checked_points.len() - old_checked_points_size < gap_size {
-                        // This overlaps with a seen gap, no need to re-add it.
-                        continue;
-                    }
-                    if gap_size < min_gift_size {
-                        count_blocked += gap_size;
-                    }
                 }
             }
         }
-        count_blocked
+        blocked
+    }
+}
+
+impl Debug for PlacementSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut space_str = String::new();
+        for y in 0..self.height {
+            if !space_str.is_empty() {
+                space_str.push('\n');
+            }
+            for x in 0..self.width {
+                space_str.push_str(&format!("{}", self.space[y * self.width + x]))
+            }
+        }
+
+        f.debug_struct("PlacementSpace")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("num_empty_pixels", &self.num_empty_pixels)
+            .field("last_fully_empty_x", &self.last_fully_empty_x)
+            .field("last_fully_empty_y", &self.last_fully_empty_y)
+            .field("space", &space_str)
+            .finish()
     }
 }
 
@@ -587,13 +725,11 @@ where
     type Item = Point2<i32>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let Some(next) = self.to_visit.pop_front() else {
-            return None;
-        };
+        let next = self.to_visit.pop_front()?;
 
-        for x in -1..=1 {
-            for y in -1..=1 {
-                let point = point![x, y];
+        for x_shift in -1..=1 {
+            for y_shift in -1..=1 {
+                let point = point![next.x + x_shift, next.y + y_shift];
                 if self.seen.contains(&point) {
                     continue;
                 }
@@ -660,7 +796,9 @@ pub fn part1(input: &str) -> AnyResult<usize> {
         .enumerate()
         .filter(|(i, t)| {
             let can_fit = t.can_fit(&gifts);
-            if !can_fit {
+            if can_fit {
+                log::info!("Fit tree {i}");
+            } else {
                 log::info!("Failed to fit tree {i}");
             }
             can_fit
@@ -871,7 +1009,7 @@ mod tests {
         // Mark a cell as occupied
         let gift: Gift = "#".parse().unwrap();
         let placed = PlacedGift::new(Point2::new(2, 2), &gift.views[0]);
-        space.place(&placed);
+        space.place(&placed, &[]);
 
         assert!(space.is_occupied(Point2::new(2, 2)));
         assert!(!space.is_occupied(Point2::new(2, 3)));
@@ -889,7 +1027,7 @@ mod tests {
         // Place first gift at (0, 0)
         let placed1 = PlacedGift::new(Point2::new(0, 0), &gift.views[0]);
         assert!(space.can_place(&placed1));
-        space.place(&placed1);
+        space.place(&placed1, &[]);
 
         // Try to place overlapping gift - should fail
         let placed2 = PlacedGift::new(Point2::new(1, 1), &gift.views[0]);
@@ -919,6 +1057,56 @@ mod tests {
         // Negative position
         let placed = PlacedGift::new(Point2::new(-1, 0), &gift.views[0]);
         assert!(!space.can_place(&placed));
+    }
+
+    #[test]
+    fn test_tree_can_fit() {
+        let gift: Gift = "###
+#.#
+#.#".parse().unwrap();
+        let tree: Tree = "4x4: 2".parse().unwrap();
+
+        assert!(tree.can_fit(&[gift]));
+    }
+
+    #[test]
+    fn test_placements_find_blocked_points() {
+        let gift: Gift = "###
+#.#
+#.#".parse().unwrap();
+        let mut placements = PlacementSpace::new(4,4);
+
+        let normal_view = gift.views.iter().find(|v| v.rotation == Rotation::Rot0 && v.flip == Flip::None).unwrap();
+        let upside_down_view = normal_view.create_flipped(Flip::Vertical);
+
+        let blocked_normal = placements.find_blocked_points(
+            &PlacedGift::new(point![0, 0], normal_view), &[&gift]);
+        assert!(blocked_normal.is_empty()); 
+
+        let blocked_upside_down = placements.find_blocked_points(
+            &PlacedGift::new(point![0, 0], &upside_down_view), &[&gift]);
+        assert_eq!(blocked_upside_down, [
+            point![1, 0],
+            point![1, 1],
+        ].into_iter().collect());
+
+        // Now place the normal orientation, and see if the remaining corners are blocked
+        // by placing the upside down view intersecting it.
+        placements.place(&PlacedGift::new(point![0, 0], normal_view), &[]);
+        let second_placement = PlacedGift::new(
+                point![1, 1], &upside_down_view
+            );
+        let blocked_upside_down = placements.find_blocked_points(
+            &second_placement, &[&gift]);
+        assert_eq!(blocked_upside_down, [
+            point![0, 3],
+            point![3, 0],
+        ].into_iter().collect());
+
+        // Then see if there are no more gifts to place that it's fine.
+        let blocked_upside_down = placements.find_blocked_points(
+            &second_placement, &[]);
+        assert!(blocked_upside_down.is_empty());
     }
 
     #[test]
