@@ -1,6 +1,7 @@
 use std::{
     collections::{HashSet, VecDeque},
     fmt::{Debug, Display},
+    iter::FromIterator,
     str::FromStr,
 };
 
@@ -49,19 +50,18 @@ enum Rotation {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Flip {
-    None,
     Horizontal,
     Vertical,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 /// A view of a shape in a specific orientation (rotation and/or flip).
+/// Can represent a combination of multiple gifts.
 struct ShapeView {
     width: usize,
     height: usize,
     pixels: Vec<Pixel>, // Flat row-major: index = row * width + col
-    rotation: Rotation,
-    flip: Flip,
+    gift_ids: HashSet<usize>, // Gift IDs (indexes) contained in this view
 }
 
 impl ShapeView {
@@ -79,13 +79,13 @@ impl ShapeView {
     }
 
     fn looks_same(&self, other: &Self) -> bool {
-        self.width == other.width && self.height == other.height && self.pixels == other.pixels
+        self.width == other.width
+            && self.height == other.height
+            && self.pixels == other.pixels
+            && self.gift_ids == other.gift_ids
     }
 
     fn create_flipped(&self, flip: Flip) -> Self {
-        if self.flip != Flip::None {
-            unimplemented!("Can't flip from an already flipped state");
-        }
         let mut new_pixels = self.pixels.clone();
         match flip {
             Flip::Horizontal => {
@@ -112,16 +112,12 @@ impl ShapeView {
                     }
                 }
             }
-            _ => {
-                unimplemented!("Can't flip back to 'no flip' state");
-            }
         }
         Self {
             pixels: new_pixels,
-            flip,
             width: self.width,
             height: self.height,
-            rotation: self.rotation,
+            gift_ids: self.gift_ids.clone(),
         }
     }
 }
@@ -129,25 +125,23 @@ impl ShapeView {
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct Gift {
     area: usize,
-    views: Vec<ShapeView>, // Pre-computed: Rot0, Rot90, Rot180, Rot270, and flipped.
+    shape: Vec<Vec<Pixel>>, // Original shape for reference
 }
 
 impl Gift {
-    fn create_rotated_shape(shape: &[Vec<Pixel>], rotation: Rotation) -> ShapeView {
+    fn create_shape_view(shape: &[Vec<Pixel>], gift_id: usize, rotation: Rotation) -> ShapeView {
         let h = shape.len();
         let w = if h > 0 { shape[0].len() } else { 0 };
 
-        let (width, height, pixels, rotation) = match rotation {
+        let (width, height, pixels) = match rotation {
             Rotation::Rot0 => {
                 // No rotation - copy as-is into flat array
                 let pixels: Vec<_> = shape.iter().flat_map(|row| row.iter().copied()).collect();
-                (w, h, pixels, Rotation::Rot0)
+                (w, h, pixels)
             }
             Rotation::Rot90 => {
                 // Rotate 90 degrees clockwise
-                // new[col][h-1-row] = old[row][col]
                 let mut pixels = vec![Pixel::Empty; w * h];
-
                 for row in 0..h {
                     for col in 0..w {
                         let new_row = col;
@@ -155,13 +149,11 @@ impl Gift {
                         pixels[new_row * h + new_col] = shape[row][col];
                     }
                 }
-                (h, w, pixels, Rotation::Rot90)
+                (h, w, pixels)
             }
             Rotation::Rot180 => {
                 // Rotate 180 degrees
-                // new[h-1-row][w-1-col] = old[row][col]
                 let mut pixels = vec![Pixel::Empty; w * h];
-
                 for row in 0..h {
                     for col in 0..w {
                         let new_row = h - 1 - row;
@@ -169,13 +161,11 @@ impl Gift {
                         pixels[new_row * w + new_col] = shape[row][col];
                     }
                 }
-                (w, h, pixels, Rotation::Rot180)
+                (w, h, pixels)
             }
             Rotation::Rot270 => {
                 // Rotate 270 degrees clockwise (90 CCW)
-                // new[w-1-col][row] = old[row][col]
                 let mut pixels = vec![Pixel::Empty; w * h];
-
                 for row in 0..h {
                     for col in 0..w {
                         let new_row = w - 1 - col;
@@ -183,7 +173,7 @@ impl Gift {
                         pixels[new_row * h + new_col] = shape[row][col];
                     }
                 }
-                (h, w, pixels, Rotation::Rot270)
+                (h, w, pixels)
             }
         };
 
@@ -191,8 +181,7 @@ impl Gift {
             width,
             height,
             pixels,
-            rotation,
-            flip: Flip::None,
+            gift_ids: HashSet::from_iter([gift_id]),
         }
     }
 }
@@ -229,25 +218,53 @@ impl FromStr for Gift {
             .filter(|p| **p == Pixel::Gift)
             .count();
 
-        // Pre-compute all unique views.
-        let mut views = vec![Gift::create_rotated_shape(&shape, Rotation::Rot0)];
+        Ok(Self { area, shape })
+    }
+}
 
-        for rotation in [Rotation::Rot90, Rotation::Rot180, Rotation::Rot270] {
-            let view = Gift::create_rotated_shape(&shape, rotation);
-            if !views.iter().any(|v| v.looks_same(&view)) {
-                views.push(view);
-            }
-        }
-        for i in 0..views.len() {
-            for flip in [Flip::Vertical, Flip::Horizontal] {
-                let flipped = views[i].create_flipped(flip);
-                if !views.iter().any(|v| v.looks_same(&flipped)) {
-                    views.push(flipped);
+/// Cache of unique shape views for gifts and their combinations.
+#[derive(Debug, Clone)]
+struct ViewCache {
+    views: Vec<ShapeView>,
+}
+
+impl ViewCache {
+    /// Creates a new ViewCache initialized with all unique views of individual gifts.
+    fn new(gifts: &[Gift]) -> Self {
+        let mut views = Vec::new();
+
+        for (gift_id, gift) in gifts.iter().enumerate() {
+            // Generate all unique rotations and flips for this gift
+            let mut gift_views = vec![Gift::create_shape_view(&gift.shape, gift_id, Rotation::Rot0)];
+
+            for rotation in [Rotation::Rot90, Rotation::Rot180, Rotation::Rot270] {
+                let view = Gift::create_shape_view(&gift.shape, gift_id, rotation);
+                if !gift_views.iter().any(|v| v.looks_same(&view)) {
+                    gift_views.push(view);
                 }
             }
+
+            let num_rotations = gift_views.len();
+            for i in 0..num_rotations {
+                for flip in [Flip::Vertical, Flip::Horizontal] {
+                    let flipped = gift_views[i].create_flipped(flip);
+                    if !gift_views.iter().any(|v| v.looks_same(&flipped)) {
+                        gift_views.push(flipped);
+                    }
+                }
+            }
+
+            views.extend(gift_views);
         }
 
-        Ok(Self { area, views })
+        Self { views }
+    }
+
+    /// Get all views for a specific gift ID.
+    fn views_for_gift(&self, gift_id: usize) -> impl Iterator<Item = &ShapeView> {
+        self.views.iter().filter(move |v| {
+            v.gift_ids.len() == 1 && v.gift_ids.contains(&gift_id)
+        })
     }
 }
 
@@ -495,6 +512,7 @@ impl PlacementSpace {
         &mut self,
         gifts_to_place: &[usize],
         gifts: &'g [Gift],
+        view_cache: &'g ViewCache,
     ) -> Vec<PossiblePlacement<'g>> {
         let min_space_needed: usize = gifts_to_place
             .iter()
@@ -505,7 +523,7 @@ impl PlacementSpace {
             return Vec::new();
         }
 
-        let mut possible_placements = Vec::new();
+        let mut possible_placements: Vec<PossiblePlacement<'_>> = Vec::new();
 
         for x in 0..=self.last_fully_empty_x.min(self.width - 1) {
             for y in 0..=self.last_fully_empty_y.min(self.height - 1) {
@@ -518,7 +536,6 @@ impl PlacementSpace {
                     .enumerate()
                     .filter(|(_idx, num)| **num != 0)
                 {
-                    let gift = &gifts[gift_idx];
                     let other_available_gifts: Vec<_> = gifts_to_place
                         .iter()
                         .enumerate()
@@ -530,10 +547,21 @@ impl PlacementSpace {
                             }
                         })
                         .collect();
-                    let valid_placements = self.find_valid_placements_at(at, gift);
+                    let valid_placements = self.find_valid_placements_at(at, gift_idx, view_cache);
                     for placed_gift in valid_placements {
                         let blocked_points =
                             self.find_blocked_points(&placed_gift, &other_available_gifts);
+                        if let Some(existing_placement_idx) = possible_placements.iter().position(|p| {
+                            p.gift_idx == gift_idx && p.gift.view.looks_same(placed_gift.view)
+                        }) {
+                            if possible_placements[existing_placement_idx].blocked_points.len() <= blocked_points.len() {
+                                // Just keep one placement per view.
+                                continue;
+                            } else {
+                                possible_placements.remove(existing_placement_idx);
+                            }
+                        }
+
                         possible_placements.push(PossiblePlacement::new(
                             gift_idx,
                             placed_gift,
@@ -555,10 +583,11 @@ impl PlacementSpace {
     fn find_valid_placements_at<'g>(
         &self,
         at: Point2<i32>,
-        gift: &'g Gift,
+        gift_idx: usize,
+        view_cache: &'g ViewCache,
     ) -> impl Iterator<Item = PlacedGift<'g>> {
         let mut placed_gifts = Vec::with_capacity(4);
-        for view in gift.views.iter() {
+        for view in view_cache.views_for_gift(gift_idx) {
             let top_left = view.occupied_pixels().next().unwrap();
             let required_offset = at - point![top_left.0 as i32, top_left.1 as i32];
             let placed_gift = PlacedGift::new(Point2::from(required_offset), view);
@@ -693,17 +722,24 @@ struct Tree {
 }
 
 /// Tries to fill the placement space with the number of each gift from gifts_to_place.
-fn try_fill(placements: &mut PlacementSpace, gifts_to_place: &mut [usize], gifts: &[Gift]) -> bool {
+fn try_fill(
+    placements: &mut PlacementSpace,
+    gifts_to_place: &mut [usize],
+    gifts: &[Gift],
+    view_cache: &ViewCache,
+) -> bool {
     if gifts_to_place.iter().sum::<usize>() == 0 {
         log::debug!("Found functional placement for tree: {:?}", placements);
         return true;
     }
 
-    let possible_placements = placements.next_possible_placements(gifts_to_place, gifts);
-    for placement in possible_placements {
+    let possible_placements = placements.next_possible_placements(gifts_to_place, gifts, view_cache);
+    // Skip any placements that block more than the minimum to reduce the search space.
+    let min_blocked_points = possible_placements.get(0).map(|p| p.blocked_points.len());
+    for placement in possible_placements.into_iter().filter(|p| p.blocked_points.len() == min_blocked_points.unwrap()) {
         gifts_to_place[placement.gift_idx] -= 1;
         placements.place(&placement.gift, &placement.blocked_points);
-        if try_fill(placements, gifts_to_place, gifts) {
+        if try_fill(placements, gifts_to_place, gifts, view_cache) {
             return true;
         }
         placements.unplace(&placement.gift, &placement.blocked_points);
@@ -713,7 +749,7 @@ fn try_fill(placements: &mut PlacementSpace, gifts_to_place: &mut [usize], gifts
 }
 
 impl Tree {
-    fn can_fit(&self, gifts: &[Gift]) -> bool {
+    fn can_fit(&self, gifts: &[Gift], view_cache: &ViewCache) -> bool {
         let minimum_area: usize = gifts
             .iter()
             .enumerate()
@@ -726,7 +762,7 @@ impl Tree {
 
         let mut gifts_to_place = self.num_gifts.clone();
         let mut placements = PlacementSpace::new(self.space.width, self.space.height);
-        try_fill(&mut placements, &mut gifts_to_place, gifts)
+        try_fill(&mut placements, &mut gifts_to_place, gifts, view_cache)
     }
 }
 
@@ -786,12 +822,13 @@ fn parse_gifts_and_trees(input: &str) -> Result<(Vec<Gift>, Vec<Tree>), Error> {
 
 pub fn part1(input: &str) -> AnyResult<usize> {
     let (gifts, trees) = parse_gifts_and_trees(input)?;
+    let view_cache = ViewCache::new(&gifts);
 
     Ok(trees
         .iter()
         .enumerate()
         .filter(|(i, t)| {
-            let can_fit = t.can_fit(&gifts);
+            let can_fit = t.can_fit(&gifts, &view_cache);
             if can_fit {
                 log::info!("Fit tree {i}");
             } else {
@@ -818,8 +855,9 @@ mod tests {
         let gift = result.unwrap();
         assert_eq!(gift.area, 7);
 
-        // Verify Rot0 shape (original)
-        let rot0 = &gift.views[0];
+        // Verify Rot0 shape (original) through ViewCache
+        let view_cache = ViewCache::new(&[gift]);
+        let rot0 = view_cache.views_for_gift(0).next().unwrap();
         assert_eq!(rot0.width, 3);
         assert_eq!(rot0.height, 3);
         assert_eq!(rot0.get_pixel(0, 0), Pixel::Gift);
@@ -856,8 +894,9 @@ mod tests {
         let gift = result.unwrap();
         assert_eq!(gift.area, 3);
 
-        // Verify Rot0 shape
-        let rot0 = &gift.views[0];
+        // Verify Rot0 shape through ViewCache
+        let view_cache = ViewCache::new(&[gift]);
+        let rot0 = view_cache.views_for_gift(0).next().unwrap();
         assert_eq!(rot0.width, 3);
         assert_eq!(rot0.height, 3);
         assert_eq!(rot0.get_pixel(0, 0), Pixel::Gift);
@@ -958,7 +997,12 @@ mod tests {
         .parse()
         .unwrap();
 
-        let rot90 = &gift.views[1];
+        let view_cache = ViewCache::new(&[gift]);
+        let mut views: Vec<_> = view_cache.views_for_gift(0).collect();
+        // Sort by width for deterministic ordering
+        views.sort_by_key(|v| v.width);
+        let rot90 = views.iter().find(|v| v.width == 2 && v.height == 2 && v.get_pixel(0, 0) == Pixel::Empty).unwrap();
+
         assert_eq!(rot90.width, 2); // Dimensions swapped
         assert_eq!(rot90.height, 2);
 
@@ -978,7 +1022,10 @@ mod tests {
         .parse()
         .unwrap();
 
-        let rot180 = &gift.views[2];
+        let view_cache = ViewCache::new(&[gift]);
+        let views: Vec<_> = view_cache.views_for_gift(0).collect();
+        let rot180 = views.iter().find(|v| v.width == 2 && v.height == 2 && v.get_pixel(0, 0) == Pixel::Gift && v.get_pixel(0, 1) == Pixel::Empty).unwrap();
+
         // Original:    After 180°:
         // ##           #.
         // .#           ##
@@ -1004,7 +1051,9 @@ mod tests {
 
         // Mark a cell as occupied
         let gift: Gift = "#".parse().unwrap();
-        let placed = PlacedGift::new(Point2::new(2, 2), &gift.views[0]);
+        let view_cache = ViewCache::new(&[gift]);
+        let view = view_cache.views_for_gift(0).next().unwrap();
+        let placed = PlacedGift::new(Point2::new(2, 2), view);
         space.place(&placed, &[]);
 
         assert!(space.is_occupied(Point2::new(2, 2)));
@@ -1020,17 +1069,20 @@ mod tests {
         .parse()
         .unwrap();
 
+        let view_cache = ViewCache::new(&[gift]);
+        let view = view_cache.views_for_gift(0).next().unwrap();
+
         // Place first gift at (0, 0)
-        let placed1 = PlacedGift::new(Point2::new(0, 0), &gift.views[0]);
+        let placed1 = PlacedGift::new(Point2::new(0, 0), view);
         assert!(space.can_place(&placed1));
         space.place(&placed1, &[]);
 
         // Try to place overlapping gift - should fail
-        let placed2 = PlacedGift::new(Point2::new(1, 1), &gift.views[0]);
+        let placed2 = PlacedGift::new(Point2::new(1, 1), view);
         assert!(!space.can_place(&placed2));
 
         // Place adjacent gift - should succeed
-        let placed3 = PlacedGift::new(Point2::new(2, 0), &gift.views[0]);
+        let placed3 = PlacedGift::new(Point2::new(2, 0), view);
         assert!(space.can_place(&placed3));
     }
 
@@ -1042,16 +1094,19 @@ mod tests {
         .parse()
         .unwrap();
 
+        let view_cache = ViewCache::new(&[gift]);
+        let view = view_cache.views_for_gift(0).next().unwrap();
+
         // Gift would extend beyond right edge
-        let placed = PlacedGift::new(Point2::new(2, 0), &gift.views[0]);
+        let placed = PlacedGift::new(Point2::new(2, 0), view);
         assert!(!space.can_place(&placed));
 
         // Gift would extend beyond bottom edge
-        let placed = PlacedGift::new(Point2::new(0, 2), &gift.views[0]);
+        let placed = PlacedGift::new(Point2::new(0, 2), view);
         assert!(!space.can_place(&placed));
 
         // Negative position
-        let placed = PlacedGift::new(Point2::new(-1, 0), &gift.views[0]);
+        let placed = PlacedGift::new(Point2::new(-1, 0), view);
         assert!(!space.can_place(&placed));
     }
 
@@ -1063,8 +1118,9 @@ mod tests {
         .parse()
         .unwrap();
         let tree: Tree = "4x4: 2".parse().unwrap();
+        let view_cache = ViewCache::new(&[gift.clone()]);
 
-        assert!(tree.can_fit(&[gift]));
+        assert!(tree.can_fit(&[gift], &view_cache));
     }
 
     #[test]
@@ -1076,11 +1132,8 @@ mod tests {
         .unwrap();
         let mut placements = PlacementSpace::new(4, 4);
 
-        let normal_view = gift
-            .views
-            .iter()
-            .find(|v| v.rotation == Rotation::Rot0 && v.flip == Flip::None)
-            .unwrap();
+        let view_cache = ViewCache::new(&[gift.clone()]);
+        let normal_view = view_cache.views_for_gift(0).next().unwrap();
         let upside_down_view = normal_view.create_flipped(Flip::Vertical);
 
         let blocked_normal =
@@ -1116,7 +1169,9 @@ mod tests {
         .parse()
         .unwrap();
 
-        let placed = PlacedGift::new(Point2::new(1, 1), &gift.views[0]);
+        let view_cache = ViewCache::new(&[gift]);
+        let view = view_cache.views_for_gift(0).next().unwrap();
+        let placed = PlacedGift::new(Point2::new(1, 1), view);
         let pixels: Vec<_> = placed.occupied_world_pixels().collect();
 
         // Original shape has 3 Gift pixels at (0,1), (1,0), (1,1)
